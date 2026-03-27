@@ -1,0 +1,214 @@
+Pi Radio Station Player — Installation Scripts
+===============================================
+Copy and paste each script into your terminal.
+Run them in order from top to bottom.
+
+
+================================================================
+STEP 1 — Update your system
+================================================================
+Run this first before anything else.
+
+    sudo apt update && sudo apt upgrade -y
+
+
+================================================================
+STEP 2 — Install Python 3 and pip
+================================================================
+Python 3 is usually already on Raspberry Pi OS.
+This makes sure pip is also installed.
+
+    sudo apt install -y python3 python3-pip
+
+
+================================================================
+STEP 3 — Install tkinter (the desktop UI)
+================================================================
+Tkinter is the library that draws the windows and buttons.
+Without this the UI will not open.
+
+    sudo apt install -y python3-tk
+
+
+================================================================
+STEP 4 — Install VLC and python-vlc (audio playback)
+================================================================
+VLC is what actually plays the audio files.
+python-vlc is the Python wrapper that lets the program talk to VLC.
+
+    sudo apt install -y vlc
+
+    pip3 install python-vlc --break-system-packages
+
+If pip3 gives you an error about externally managed environment, use:
+
+    pip3 install python-vlc --break-system-packages --user
+
+
+================================================================
+STEP 5 — Verify everything installed correctly
+================================================================
+Run this to check all three pieces are working.
+You should see OK next to each one.
+
+    python3 - << 'EOF'
+    import sys
+    print(f"Python version: {sys.version}")
+
+    try:
+        import tkinter
+        print("tkinter:    OK")
+    except Exception as e:
+        print(f"tkinter:    MISSING — {e}")
+
+    try:
+        import vlc
+        print("python-vlc: OK")
+    except Exception as e:
+        print(f"python-vlc: MISSING — {e}")
+
+    try:
+        import vlc
+        inst = vlc.Instance()
+        print("VLC engine: OK")
+    except Exception as e:
+        print(f"VLC engine: MISSING — {e}")
+    EOF
+
+
+================================================================
+STEP 6 — Extract the radio program
+================================================================
+Put the zip file somewhere easy to find, then extract it.
+Replace ~/radio with wherever you want to keep the program.
+
+    mkdir -p ~/radio
+    unzip radio_program_fixed_v41_patched14.zip -d ~/radio
+    cd ~/radio/radio_program_fixed14
+
+
+================================================================
+STEP 7 — Run the program
+================================================================
+From inside the folder where the files are:
+
+    python3 run_radio.py
+
+Or use the shell script on Linux/Raspberry Pi:
+
+    bash start_all.sh
+
+To stop it:
+
+    bash kill_radio.sh
+
+
+================================================================
+STEP 8 — Make it start automatically on boot (optional)
+================================================================
+If you want the radio to start automatically when the Pi boots,
+run this script. It creates a systemd service for you.
+
+Replace /home/pi/radio/radio_program_fixed14 with your actual path.
+
+    sudo bash << 'EOF'
+    cat > /etc/systemd/system/pi-radio.service << 'SERVICE'
+    [Unit]
+    Description=Pi Radio Station Player Backend
+    After=network.target sound.target
+
+    [Service]
+    Type=simple
+    User=pi
+    WorkingDirectory=/home/pi/radio/radio_program_fixed14
+    ExecStart=/usr/bin/python3 -u radio_backend.py
+    Restart=on-failure
+    RestartSec=5
+    Environment=PYTHONUNBUFFERED=1
+
+    [Install]
+    WantedBy=multi-user.target
+    SERVICE
+
+    systemctl daemon-reload
+    systemctl enable pi-radio
+    systemctl start pi-radio
+    echo "Service installed and started."
+    echo "Check status with: sudo systemctl status pi-radio"
+    EOF
+
+Note: change User=pi and WorkingDirectory to match your setup
+if your username or folder path is different.
+
+To check the service is running:
+
+    sudo systemctl status pi-radio
+
+To view the backend log:
+
+    tail -f ~/radio/radio_program_fixed14/backend.out
+
+To stop the auto-start service:
+
+    sudo systemctl stop pi-radio
+    sudo systemctl disable pi-radio
+
+
+================================================================
+TROUBLESHOOTING
+================================================================
+
+Problem: "tkinter is not available"
+Fix:     sudo apt install -y python3-tk
+
+Problem: "python-vlc / VLC is not available" in the log
+Fix:     sudo apt install -y vlc
+         pip3 install python-vlc --break-system-packages
+
+Problem: No audio output
+Fix:     Make sure your audio output is configured.
+         On Raspberry Pi run: sudo raspi-config
+         Then go to System Options > Audio and select your output.
+
+Problem: "Backend failed to start"
+Fix:     Check the log file: cat backend.out
+         The last few lines will show the error.
+
+Problem: UI window doesn't appear
+Fix:     Make sure you have a desktop environment running.
+         The UI requires a display — it won't work over SSH
+         unless you use SSH with X forwarding:
+         ssh -X pi@your-pi-address
+
+Problem: Permission denied running scripts
+Fix:     chmod +x start_all.sh kill_radio.sh
+         then run them with bash start_all.sh
+
+
+================================================================
+QUICK REFERENCE — files in the program folder
+================================================================
+
+run_radio.py        — start everything (recommended)
+start_all.sh        — start everything (shell script version)
+start_backend.sh    — start backend only (no UI)
+kill_radio.sh       — stop everything cleanly
+radio_backend.py    — the backend engine (don't run directly)
+radio_ui.py         — the desktop UI (don't run directly)
+shared_radio.py     — shared settings and constants
+backend.out         — backend log file (check this if things go wrong)
+
+
+================================================================
+REQUIREMENTS SUMMARY
+================================================================
+
+Operating system:   Raspberry Pi OS (Bullseye or Bookworm)
+                    or any Debian/Ubuntu Linux desktop
+Python:             3.9 or newer
+VLC:                any recent version (3.x or 4.x)
+python-vlc:         via pip
+tkinter:            via apt
+Display:            required for the UI (desktop environment)
+Audio output:       speakers or headphones connected to the Pi
+Storage:            USB drive, hard drive, or SD card with music

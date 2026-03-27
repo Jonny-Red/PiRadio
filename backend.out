@@ -1,0 +1,10 @@
+[2026-03-27 08:11:22] Loaded cached main library: 10899 file(s).
+[2026-03-27 08:11:22] Loaded cached show folders: 53 folder(s).
+[2026-03-27 08:11:22] Loaded cached commercials: 386 file(s).
+[2026-03-27 08:11:22] Backend started. Version v41
+[2026-03-27 08:11:22] VLC available: True
+=== RADIO BACKEND STARTING ===
+Radio backend listening on http://0.0.0.0:8765
+Web UI available at http://0.0.0.0:8765/
+[2026-03-27 08:11:37] Playback stopped.
+[2026-03-27 08:11:38] Playback stopped.
