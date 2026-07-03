@@ -5,9 +5,10 @@ from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import List
 import json
+import os
 
 APP_TITLE = "Pi Radio Station Player"
-APP_VERSION = 'v41'
+APP_VERSION = 'v41.32'  # shown in the web UI badge — confirms which build the page is talking to
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 SUPPORTED_EXTENSIONS = {".mp3", ".wav", ".ogg", ".flac", ".m4a", ".aac"}
@@ -48,6 +49,7 @@ class AppSettings:
     fade_in_seconds: float = 2.0
     auto_resume_random: bool = True
     scheduler_enabled: bool = True
+    autoplay_on_start: bool = True  # if False, skip the startup catch-up auto-play; scheduler still runs going forward
     duration_start_hour: int = 1
     duration_start_minute: int = 0
     program_blocks: List[dict] = field(default_factory=list)
@@ -93,6 +95,7 @@ class AppSettings:
             self.fade_in_seconds = 2.0
         self.fade_out_seconds = max(0.0, min(10.0, self.fade_out_seconds))
         self.fade_in_seconds = max(0.0, min(10.0, self.fade_in_seconds))
+        self.autoplay_on_start = bool(self.autoplay_on_start)
         if not isinstance(self.program_blocks, list):
             self.program_blocks = []
         hap = list(self.hourly_audio_paths or [])
@@ -182,4 +185,9 @@ class AppSettings:
 
     def save(self) -> None:
         self.normalize()
-        SETTINGS_FILE.write_text(json.dumps(self.to_dict(), indent=2))
+        # Atomic write: temp file + os.replace so a power cut mid-save
+        # can't corrupt the settings file (which would silently reset
+        # every setting to defaults on the next load).
+        tmp = SETTINGS_FILE.with_name(SETTINGS_FILE.name + '.tmp')
+        tmp.write_text(json.dumps(self.to_dict(), indent=2))
+        os.replace(tmp, SETTINGS_FILE)

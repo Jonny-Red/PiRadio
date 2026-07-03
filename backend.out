@@ -1,10 +1,49 @@
-[2026-03-27 08:11:22] Loaded cached main library: 10899 file(s).
-[2026-03-27 08:11:22] Loaded cached show folders: 53 folder(s).
-[2026-03-27 08:11:22] Loaded cached commercials: 386 file(s).
-[2026-03-27 08:11:22] Backend started. Version v41
-[2026-03-27 08:11:22] VLC available: True
+[2026-07-03 07:14:56] Loaded cached main library: 10899 file(s).
+[2026-07-03 07:14:56] Loaded cached show folders: 53 folder(s).
+[2026-07-03 07:14:56] Loaded cached commercials: 386 file(s).
+[2026-07-03 07:14:56] Backend started. Version v41.32
+[2026-07-03 07:14:56] VLC available: True
+[2026-07-03 07:14:56] Web interface addresses (open any of these on a phone or PC):
+[2026-07-03 07:14:56]     http://raspberrypi.local:8765   (name)
+[2026-07-03 07:14:56]     http://100.76.141.1:8765   (Tailscale)
+[2026-07-03 07:14:56]     http://192.168.50.152:8765   (LAN)
 === RADIO BACKEND STARTING ===
 Radio backend listening on http://0.0.0.0:8765
 Web UI available at http://0.0.0.0:8765/
-[2026-03-27 08:11:37] Playback stopped.
-[2026-03-27 08:11:38] Playback stopped.
+[2026-07-03 07:14:57] Catch-up scheduler (startup): starting "Tales of the Texas Rangers" (currently in its window 07:00-08:00).
+[2026-07-03 07:14:57] Scheduler starting block Tales of the Texas Rangers (07:00-08:00)
+[2026-07-03 07:14:57] Playing scheduled:Tales of the Texas Rangers: /media/jcharny/Charny2/Old Time Radio/Tales of the Texas Rangers/Texas_Rangers_1950_12_10_22_The_Lucky_Dollar.mp3
+[2026-07-03 07:44:54] End-of-track: queuing 3 commercial(s).
+[2026-07-03 07:44:54] Playing commercial: /media/jcharny/Charny2/OTR Commericals/159 - OldRadio_Adv--Ford3.mp3
+[2026-07-03 07:44:54] Starting commercial break (3 spot(s)) — will return to "Tales of the Texas Rangers" after.
+[2026-07-03 07:46:01] Playing commercial: /media/jcharny/Charny2/OTR Commericals/306 - OldRadio_Adv--Quaker_Oats6.mp3
+[2026-07-03 07:46:01] Starting commercial break (2 spot(s)) — will return to "Tales of the Texas Rangers" after.
+[2026-07-03 07:46:35] Playing commercial: /media/jcharny/Charny2/OTR Commericals/48 - OldRadio_Adv--Camel9.mp3
+[2026-07-03 07:46:35] Starting commercial break (1 spot(s)) — will return to "Tales of the Texas Rangers" after.
+[2026-07-03 07:47:35] Extended "Tales of the Texas Rangers" by 60s to account for commercial break.
+[2026-07-03 07:47:35] Playing scheduled:Tales of the Texas Rangers: /media/jcharny/Charny2/Old Time Radio/Tales of the Texas Rangers/Tales Of The Texas Rangers 50-12-24 Christmas Present.mp3
+[2026-07-03 08:00:00] Playing hour_chime:08: /media/jcharny/Charny2/Time Annocements/8am.mp3
+[2026-07-03 08:00:00] Scheduled change queued for The Six Shooter at 08:00; waiting for hour chime to finish.
+[2026-07-03 08:00:04] Playing scheduled:Tales of the Texas Rangers: /media/jcharny/Charny2/Old Time Radio/Tales of the Texas Rangers/Tales Of The Texas Rangers 50-12-24 Christmas Present.mp3
+[2026-07-03 08:00:04] Resuming scheduled:Tales of the Texas Rangers: /media/jcharny/Charny2/Old Time Radio/Tales of the Texas Rangers/Tales Of The Texas Rangers 50-12-24 Christmas Present.mp3 @ 744043 ms
+[2026-07-03 08:15:25] Playback stopped.
+[2026-07-03 08:16:40] Settings saved from frontend.
+[2026-07-03 08:16:41] Catch-up scheduler (settings saved): starting "The Six Shooter" (currently in its window 08:00-09:00).
+[2026-07-03 08:16:41] Scheduler starting block The Six Shooter (08:00-09:00)
+[2026-07-03 08:16:41] Playing scheduled:The Six Shooter: /media/jcharny/Charny2/Old Time Radio/The Six Shooter/1954-01-31 Ep 20 Trail To Sunset.mp3
+[2026-07-03 08:45:12] End-of-track: queuing 1 commercial(s).
+[2026-07-03 08:45:12] Playing commercial: /media/jcharny/Charny2/OTR Commericals/242 - OldRadio_Adv--Lucky_Strike7.mp3
+[2026-07-03 08:45:12] Starting commercial break (1 spot(s)) — will return to "The Six Shooter" after.
+[2026-07-03 08:46:27] Extended "The Six Shooter" by 75s to account for commercial break.
+[2026-07-03 08:46:27] Playing scheduled:The Six Shooter: /media/jcharny/Charny2/Old Time Radio/The Six Shooter/1953-11-01 Ep 07 Ben Scofield.mp3
+[2026-07-03 09:00:00] Playing hour_chime:09: /media/jcharny/Charny2/Time Annocements/9am.mp3
+[2026-07-03 09:00:00] Scheduled change queued for 21 Precinct at 09:00; waiting for hour chime to finish.
+[2026-07-03 09:00:04] Playing scheduled:The Six Shooter: /media/jcharny/Charny2/Old Time Radio/The Six Shooter/1953-11-01 Ep 07 Ben Scofield.mp3
+[2026-07-03 09:00:04] Resuming scheduled:The Six Shooter: /media/jcharny/Charny2/Old Time Radio/The Six Shooter/1953-11-01 Ep 07 Ben Scofield.mp3 @ 812040 ms
+[2026-07-03 09:16:03] End-of-track (show boundary): queuing 2 commercial(s) before "21 Precinct".
+[2026-07-03 09:16:03] Playing commercial: /media/jcharny/Charny2/OTR Commericals/15 - OldRadio_Adv--Arid_Deoderant.mp3
+[2026-07-03 09:16:03] Starting commercial break (2 spot(s)) — will return to "The Six Shooter" after.
+[2026-07-03 09:16:50] Playing commercial: /media/jcharny/Charny2/OTR Commericals/319 - OldRadio_Adv--Rio_Grande_Gas1.mp3
+[2026-07-03 09:16:50] Starting commercial break with 1 spot(s).
+[2026-07-03 09:18:34] Scheduler starting block 21 Precinct (09:00-10:00)
+[2026-07-03 09:18:34] Playing scheduled:21 Precinct: /media/jcharny/Charny2/Old Time Radio/21 Precinct/21st_Precinct_54-07-07_ep052_The_Mover.mp3

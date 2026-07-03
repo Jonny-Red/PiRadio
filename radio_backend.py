@@ -8,6 +8,7 @@ import queue
 import random
 import socket
 import struct
+import subprocess
 import tempfile
 import threading
 import time
@@ -36,6 +37,11 @@ from shared_radio import (
     LOG_FILE,
 )
 
+_APP_DIR = Path(__file__).resolve().parent
+CLASSIC_UI_FILE = _APP_DIR / 'pi_radio_web.html'
+NEW_UI_FILE = _APP_DIR / 'pi_radio_new.html'
+
+
 
 class SimplePlayer:
     def __init__(self, logger):
@@ -46,6 +52,11 @@ class SimplePlayer:
         self.current_path = ''
         self.current_kind = ''
         self.last_play_started_at = 0.0  # wall time of most recent play() call
+        # Monotonic counter bumped on every play()/stop(). Deferred work
+        # (the resume_saved seek/fade thread) captures it at spawn and
+        # re-checks before acting, so it can never seek/fade a track that
+        # was loaded after it was spawned.
+        self.play_generation = 0
 
     def set_volume(self, volume: int):
         with self.lock:
@@ -77,12 +88,25 @@ class SimplePlayer:
         start_volume = self.get_volume()
         if start_volume == target_volume:
             return
+        # Capture the play generation: if a different track starts (or stop()
+        # is called) while this fade is running, abort instead of dragging
+        # the NEW track's volume around. This fixes two long-standing races:
+        # an end-of-track fade-out fighting the next track's fade-in, and a
+        # dying fade-out silencing a chime that starts mid-fade.
+        with self.lock:
+            my_generation = self.play_generation
         sleep_for = max(0.01, duration / steps)
         delta = (target_volume - start_volume) / float(steps)
         for idx in range(steps):
+            with self.lock:
+                if self.play_generation != my_generation:
+                    return
             new_volume = int(round(start_volume + (delta * (idx + 1))))
             self.set_volume(new_volume)
             time.sleep(sleep_for)
+        with self.lock:
+            if self.play_generation != my_generation:
+                return
         self.set_volume(target_volume)
 
     def play(self, path: str, kind: str = 'main'):
@@ -98,6 +122,7 @@ class SimplePlayer:
             self.current_path = path
             self.current_kind = kind
             self.last_play_started_at = time.time()
+            self.play_generation += 1
         self.logger(f'Playing {kind}: {path}')
 
     def stop(self):
@@ -107,6 +132,7 @@ class SimplePlayer:
             self.current_path = ''
             self.current_kind = ''
             self.last_play_started_at = 0.0
+            self.play_generation += 1
         self.logger('Playback stopped.')
 
     def pause(self):
@@ -197,6 +223,8 @@ class SimplePlayer:
         self.play(path, kind)
         time_ms = max(0, int(time_ms))
         self.logger(f'Resuming {kind}: {path} @ {time_ms} ms')
+        with self.lock:
+            my_generation = self.play_generation
 
         def _do_seek_and_fade():
             sought = threading.Event()
@@ -225,6 +253,13 @@ class SimplePlayer:
                 except Exception:
                     pass
 
+            # If another play()/stop() happened while we were waiting,
+            # this thread's track is gone — do NOT seek/fade whatever is
+            # loaded now (it would jump the new track to the old position).
+            with self.lock:
+                if self.play_generation != my_generation:
+                    return
+
             # Only seek if we actually have a non-zero position to restore.
             if time_ms > 0:
                 # Try a few times — VLC sometimes needs a moment after the
@@ -238,6 +273,9 @@ class SimplePlayer:
                         pass
                     time.sleep(0.1)
 
+            with self.lock:
+                if self.play_generation != my_generation:
+                    return
             if fade_in and fade_in_seconds > 0:
                 self.fade_to(max(0, int(target_volume)), float(fade_in_seconds))
             elif fade_in:
@@ -256,7 +294,12 @@ def load_json(path: Path, default):
 
 
 def save_json(path: Path, payload) -> None:
-    path.write_text(json.dumps(payload, indent=2))
+    # Atomic write: dump to a temp file in the same directory, then
+    # os.replace() into place. A crash or power loss mid-write can no
+    # longer leave a truncated/corrupt JSON file behind.
+    tmp = path.with_name(path.name + '.tmp')
+    tmp.write_text(json.dumps(payload, indent=2))
+    os.replace(tmp, path)
 
 
 class BackendState:
@@ -281,6 +324,11 @@ class BackendState:
         self.pending_commercial_scan = None
         self.last_schedule_key = None
         self.last_chime_key = None
+        # Set by /stop: a short quiet window during which NO automatic
+        # playback (handoff, continue, catch-up, clock-start) may begin.
+        # Closes the race where a track transition in flight at the moment
+        # Stop is pressed restarts playback, forcing repeated Stop presses.
+        self.suppress_autostart_until = 0.0
         self.resume_after_chime = None
         self.chime_active = False
         self.current_chime_kind = ''
@@ -305,6 +353,7 @@ class BackendState:
         self.show_started_at = 0.0            # wall time when the current show block started
         self.breaks_this_show = 0             # how many breaks have fired in the current show block
         self.silence_watchdog_seconds = 30.0  # how long to tolerate silence before self-healing
+        self.sequential_schedule_mode = False  # True while "Play Full Schedule" marathon is running
         self.started_at = time.time()
         self.last_worker_heartbeat = self.started_at
         self.last_scheduler_heartbeat = self.started_at
@@ -316,6 +365,8 @@ class BackendState:
         self.scheduler_thread = threading.Thread(target=self.scheduler_loop, daemon=True)
         self.scheduler_thread.start()
         self.playback_monitor_thread = threading.Thread(target=self.playback_monitor_loop, daemon=True)
+        self.drive_watch_thread = threading.Thread(target=self._drive_watch_loop, daemon=True)
+        self.drive_watch_thread.start()
         self.playback_monitor_thread.start()
         self.ui_revisions = {
             'logs': 0,
@@ -335,8 +386,14 @@ class BackendState:
             self.log('Commercials were enabled without a folder. Auto-disabled for this session only (folder not set).')
         self.log(f'Backend started. Version {APP_VERSION}')
         self.log(f'VLC available: {bool(vlc)}')
-        # Give threads a moment to start, then catch up if we're mid-schedule.
-        threading.Thread(target=lambda: (time.sleep(1.5), self._catchup_schedule('startup')), daemon=True).start()
+        # Give threads a moment to start, then catch up if we're mid-schedule —
+        # unless the user has unchecked "Autoplay on start", in which case the
+        # scheduler still runs normally going forward but won't immediately
+        # resume whatever show happens to be mid-window right at boot.
+        if self.settings.autoplay_on_start:
+            threading.Thread(target=lambda: (time.sleep(1.5), self._catchup_schedule('startup')), daemon=True).start()
+        else:
+            self.log('Autoplay on start is disabled — waiting for a manual play action or the next scheduled start time.')
 
     def bump(self, *names: str):
         with self.lock:
@@ -356,6 +413,51 @@ class BackendState:
                 f.write(line + '\n')
         except Exception:
             pass
+
+    def _drive_watch_loop(self):
+        """USB drives often finish mounting AFTER the backend auto-starts on
+        boot. When that happens the media caches load empty (every cached
+        path fails the exists() check) and each Play press fails until the
+        drive appears — which is why buttons seemed to need several presses
+        after a reboot. Watch for the configured folders to appear for the
+        first few minutes and reload the caches the moment they do."""
+        deadline = time.time() + 300
+        while not self.shutdown_event.is_set() and time.time() < deadline:
+            self.shutdown_event.wait(5)
+            with self.lock:
+                s = self.settings
+                waiting = []
+                if s.media_folder and not self.library_files:
+                    waiting.append(s.media_folder)
+                if s.parent_library_folder and not self.show_folders:
+                    waiting.append(s.parent_library_folder)
+                if s.commercials_enabled and s.commercials_folder and not self.commercial_files:
+                    waiting.append(s.commercials_folder)
+            if not waiting:
+                return  # everything that is configured has loaded
+            appeared = [f for f in waiting if os.path.isdir(f)]
+            if not appeared:
+                continue
+            self.log(f'Drive/folder now available ({len(appeared)} of {len(waiting)} pending) — reloading media caches.')
+            try:
+                self.load_caches()
+            except Exception as exc:
+                self.log(f'Cache reload after mount failed: {exc}')
+                continue
+            # Freshen the caches in the background and start the schedule if
+            # we were supposed to be playing.
+            try:
+                self.enqueue_scan_library(force=False)
+                self.enqueue_scan_show_folders(force=False)
+                if self.settings.commercials_enabled and self.settings.commercials_folder:
+                    self.enqueue_scan_commercials(force=False)
+            except Exception:
+                pass
+            try:
+                if not self.player.is_playing():
+                    self._catchup_schedule('drive mounted')
+            except Exception as exc:
+                self.log(f'Catch-up after mount failed: {exc}')
 
     def load_caches(self):
         lib = load_json(LIBRARY_CACHE_FILE, {})
@@ -431,7 +533,7 @@ class BackendState:
         for key in [
             'media_folder', 'parent_library_folder', 'custom_network_path', 'volume',
             'fade_enabled', 'fade_out_seconds', 'fade_in_seconds',
-            'auto_resume_random', 'scheduler_enabled', 'duration_start_hour',
+            'auto_resume_random', 'scheduler_enabled', 'autoplay_on_start', 'duration_start_hour',
             'duration_start_minute', 'program_blocks', 'schedule_fill_mode', 'fill_source_mode', 'fill_folders', 'fill_include_subfolders',
             'commercials_enabled', 'commercials_folder', 'commercials_mode', 'commercials_per_hour', 'commercials_per_break', 'commercials_prefix', 'commercials_between_shows',
             'commercials_end_of_show', 'commercials_end_of_track', 'commercials_min_gap_minutes', 'commercials_min_show_runtime_minutes', 'commercials_max_breaks_per_show', 'commercials_spots_min', 'commercials_spots_max', 'commercials_quiet_hours', 'commercials_scheduled_only',
@@ -462,7 +564,12 @@ class BackendState:
             if after.get('commercials_enabled') and after.get('commercials_folder'):
                 rescans.append(('commercials', self.enqueue_scan_commercials))
         self.settings.save()
-        self.player.set_volume(self.settings.volume)
+        # Only push the volume to VLC if the user actually changed it.
+        # Pushing unconditionally on every save snapped the volume mid-fade
+        # (and raced with the fade thread) whenever settings were saved
+        # while a fade-in/out was running.
+        if before.get('volume') != after.get('volume'):
+            self.player.set_volume(self.settings.volume)
         self.bump('settings', 'fill')
         for _name, fn in rescans:
             try:
@@ -590,7 +697,11 @@ class BackendState:
 
     def enqueue_scan_library(self, force: bool = False):
         with self.lock:
-            if self.pending_scan:
+            # Only refuse to queue if a scan is actually in flight. A job left
+            # in 'failed' state must NOT block re-queueing — previously one
+            # failed scan (e.g. USB drive not mounted) jammed this scan type
+            # until the backend was restarted.
+            if self.pending_scan and self.pending_scan.get('status') in ('queued', 'running'):
                 return self.pending_scan
             self.pending_scan = {'status': 'queued', 'started': None, 'finished': None, 'force': force, 'count': len(self.library_files)}
         self.worker_q.put(('scan_library', {'force': force}))
@@ -598,7 +709,11 @@ class BackendState:
 
     def enqueue_scan_show_folders(self, force: bool = False):
         with self.lock:
-            if self.pending_show_scan:
+            # Only refuse to queue if a scan is actually in flight. A job left
+            # in 'failed' state must NOT block re-queueing — previously one
+            # failed scan (e.g. USB drive not mounted) jammed this scan type
+            # until the backend was restarted.
+            if self.pending_show_scan and self.pending_show_scan.get('status') in ('queued', 'running'):
                 return self.pending_show_scan
             self.pending_show_scan = {'status': 'queued', 'started': None, 'finished': None, 'force': force, 'count': len(self.show_folders)}
         self.worker_q.put(('scan_show_folders', {'force': force}))
@@ -606,7 +721,11 @@ class BackendState:
 
     def enqueue_scan_fill_library(self, force: bool = False):
         with self.lock:
-            if self.pending_fill_scan:
+            # Only refuse to queue if a scan is actually in flight. A job left
+            # in 'failed' state must NOT block re-queueing — previously one
+            # failed scan (e.g. USB drive not mounted) jammed this scan type
+            # until the backend was restarted.
+            if self.pending_fill_scan and self.pending_fill_scan.get('status') in ('queued', 'running'):
                 return self.pending_fill_scan
             self.pending_fill_scan = {'status': 'queued', 'started': None, 'finished': None, 'force': force, 'count': len(self.fill_files)}
         self.worker_q.put(('scan_fill_library', {'force': force}))
@@ -614,7 +733,11 @@ class BackendState:
 
     def enqueue_scan_commercials(self, force: bool = False):
         with self.lock:
-            if self.pending_commercial_scan:
+            # Only refuse to queue if a scan is actually in flight. A job left
+            # in 'failed' state must NOT block re-queueing — previously one
+            # failed scan (e.g. USB drive not mounted) jammed this scan type
+            # until the backend was restarted.
+            if self.pending_commercial_scan and self.pending_commercial_scan.get('status') in ('queued', 'running'):
                 return self.pending_commercial_scan
             self.pending_commercial_scan = {'status': 'queued', 'started': None, 'finished': None, 'force': force, 'count': len(self.commercial_files)}
         self.worker_q.put(('scan_commercials', {'force': force}))
@@ -1180,6 +1303,18 @@ class BackendState:
             time_ms = self.player.current_time_ms()
         return {'path': path, 'kind': kind, 'time_ms': time_ms}
 
+    def _recover_after_failed_chime(self, saved_resume: dict | None):
+        """Best-effort: if a chime failed to start but we had captured a
+        playing track, put that track back so the radio doesn't fall silent."""
+        try:
+            if saved_resume and not saved_resume.get('interrupt_only') and not self.player.is_playing():
+                self.player.resume_saved(
+                    saved_resume['path'], saved_resume['kind'], saved_resume['time_ms'],
+                    fade_in=False, target_volume=int(self.settings.volume))
+                self.log('Chime failed to start — resumed the interrupted track.')
+        except Exception as exc:
+            self.log(f'Could not resume after failed chime: {exc}')
+
     def _set_chime_active(self, kind: str):
         with self.lock:
             self.chime_active = True
@@ -1256,7 +1391,27 @@ class BackendState:
             with self.lock:
                 self.resume_after_chime = resume_state
             self._set_chime_active(kind)
-            self.player.play(path, kind)
+            # Chimes never fade, so make sure the volume is at the configured
+            # level — if the hour struck during a track's end-of-track fade,
+            # the volume may be at/near 0 and the chime would be inaudible.
+            # Set it again AFTER play(): play() bumps the play generation,
+            # which cancels any in-flight fade thread, so this second set is
+            # authoritative even if a dying fade overwrote the first one.
+            self.player.set_volume(int(s.volume))
+            try:
+                self.player.play(path, kind)
+            except Exception:
+                # The chime failed to start. Clearing the chime state is
+                # CRITICAL: chime_active gates commercials and queues schedule
+                # starts, so leaving it set after a failed test chime froze
+                # the whole radio. Put the interrupted show back if we had one.
+                self._clear_chime_active()
+                with self.lock:
+                    saved = self.resume_after_chime
+                    self.resume_after_chime = None
+                self._recover_after_failed_chime(saved)
+                raise
+            self.player.set_volume(int(s.volume))
             return {'ok': True, 'mode': mode, 'path': path, 'resumes': bool(resume_state)}
         strikes = (hour24 % 12) or 12
         path = self.generate_strike_file(strikes)
@@ -1265,7 +1420,21 @@ class BackendState:
         with self.lock:
             self.resume_after_chime = resume_state
         self._set_chime_active(kind)
-        self.player.play(path, kind)
+        # Same volume guard as the audio-drop branch above (before AND after
+        # play() — see comment there).
+        self.player.set_volume(int(s.volume))
+        try:
+            self.player.play(path, kind)
+        except Exception:
+            # Same recovery as the audio-drop branch above.
+            self._clear_chime_active()
+            self._cleanup_temp_media(path)
+            with self.lock:
+                saved = self.resume_after_chime
+                self.resume_after_chime = None
+            self._recover_after_failed_chime(saved)
+            raise
+        self.player.set_volume(int(s.volume))
         return {'ok': True, 'mode': mode, 'path': path, 'strikes': strikes, 'resumes': bool(resume_state)}
 
     def compute_schedule(self):
@@ -1403,6 +1572,8 @@ class BackendState:
             self._handoff_after_segment_finish()
 
     def _continue_active_segment(self, came_from_commercial: bool = False):
+        if self._autostart_suppressed():
+            return False
         with self.lock:
             seg = dict(self.active_segment or {})
             pending = dict(self.pending_schedule_item) if self.pending_schedule_item else None
@@ -1521,11 +1692,45 @@ class BackendState:
                 return True
         return False
 
+    def _next_sequential_item(self):
+        """Used by 'Play Full Schedule' marathon mode: advance to the next
+        block by LIST POSITION, completely ignoring the wall clock. Returns
+        None (and turns sequential mode off) once we run off the end of the
+        list, so playback falls back to the normal fill/loop/stop behavior."""
+        blocks = self.settings.program_blocks or []
+        if not blocks:
+            self.sequential_schedule_mode = False
+            return None
+        with self.lock:
+            last_index = int((self.active_segment or {}).get('index', -1))
+        next_index = last_index + 1
+        if next_index < 0 or next_index >= len(blocks):
+            self.sequential_schedule_mode = False
+            self.log('Full schedule marathon: reached the end of the block list.')
+            return None
+        block = blocks[next_index]
+        folder = block.get('folder', '')
+        label = block.get('label', '') or Path(folder).name
+        return {
+            'type': 'show',
+            'index': next_index,
+            'folder': folder,
+            'label': label,
+            'hours': float(block.get('hours', 0) or 0),
+        }
+
+    def _autostart_suppressed(self) -> bool:
+        return time.time() < float(getattr(self, 'suppress_autostart_until', 0.0) or 0.0)
+
     def _handoff_after_segment_finish(self):
+        if self._autostart_suppressed():
+            return
         pending = self._get_pending_schedule_item()
         if pending:
             item = pending
             self._set_pending_schedule_item(None)
+        elif self.sequential_schedule_mode:
+            item = self._next_sequential_item()
         else:
             minute_of_day = time.localtime().tm_hour * 60 + time.localtime().tm_min
             item = self._current_schedule_item(minute_of_day)
@@ -1546,6 +1751,12 @@ class BackendState:
                     self.log(f'Could not loop schedule after end: {exc}')
             else:
                 self.log('Schedule ended — fill mode is stop, going silent.')
+                # Clear the player's remembered path/kind so the silence
+                # watchdog knows this silence is intentional and stays quiet.
+                try:
+                    self.player.stop()
+                except Exception:
+                    pass
             return
         # Between-shows commercial (original option)
         if (self.settings.commercials_enabled
@@ -1698,6 +1909,13 @@ class BackendState:
                                         # nothing to interrupt from idle.
                                         with self.lock:
                                             self.pending_commercial_break = 0
+                                    # Clear the player's remembered chime
+                                    # path/kind so the silence watchdog treats
+                                    # this idle state as intentional.
+                                    try:
+                                        self.player.stop()
+                                    except Exception:
+                                        pass
                     elif last_kind == 'commercial':
                         if self.last_finished_signature != signature:
                             self.last_finished_signature = signature
@@ -1728,14 +1946,26 @@ class BackendState:
                                 # 'per_hour' tag from bleeding into end_of_track breaks.
                                 with self.lock:
                                     self._pending_commercial_trigger = ''
+                                started = False
                                 try:
-                                    self._start_commercial_break(pending_break, trigger=pending_trigger)
+                                    started = self._start_commercial_break(pending_break, trigger=pending_trigger)
                                 except Exception as exc:
                                     self.log(f'Commercial break failed: {exc}')
                                     with self.lock:
                                         self.pending_commercial_break = 0
-                                    if not self._continue_active_segment():
-                                        self._handoff_after_segment_finish()
+                                # If the break was blocked by a rule (quiet hour,
+                                # min gap, scheduled-only, max breaks) or raised,
+                                # fall through and keep the music going — otherwise
+                                # nothing would start the next track (dead air).
+                                # Re-check the chime here: if a chime slipped in
+                                # and blocked the break, the pending break is
+                                # still queued and the chime finish handler owns
+                                # it — starting a track now would talk over the
+                                # chime.
+                                if (not started
+                                        and not self._is_chime_active()
+                                        and not self._continue_active_segment()):
+                                    self._handoff_after_segment_finish()
                             elif not self._continue_active_segment():
                                 self._handoff_after_segment_finish()
                     elif signature != ('', ''):
@@ -1747,17 +1977,49 @@ class BackendState:
                 # so the trigger above keeps firing on poll 2.
                 if confirmed_stopped or playing:
                     last_playing = playing
-                elif kind and path:
-                    # Silence watchdog: if something should be playing but
-                    # isn't, and we've been silent longer than the threshold,
-                    # try to recover. Guards against any edge case that slips
-                    # past the debounce and error-state checks above.
-                    silent_for = time.time() - self.last_playing_at
-                    if silent_for >= self.silence_watchdog_seconds:
-                        self.last_playing_at = time.time()  # reset so we don't spam
-                        self.log(f'Silence watchdog: silent for {int(silent_for)}s with kind={kind!r} — recovering.')
-                        if not self._continue_active_segment():
-                            self._handoff_after_segment_finish()
+                # Chime watchdog: a chime that failed or died must never leave
+                # chime_active set — that flag defers commercials and queues
+                # schedule starts indefinitely, freezing the whole radio. If a
+                # chime has been "active" for 30s with no audio playing, the
+                # normal end handler clearly isn't coming: force the finish
+                # (which clears the flag, resumes any interrupted track, and
+                # starts any pending schedule item or queued break).
+                with self.lock:
+                    _chime_flag = bool(self.chime_active)
+                    _chime_started = float(self.current_chime_started_at or 0.0)
+                if (_chime_flag and _chime_started
+                        and not playing
+                        and (time.time() - _chime_started) > 30):
+                    self.log('Chime watchdog: chime marked active for 30s with no audio — clearing and resuming.')
+                    try:
+                        self._finish_chime_and_resume()
+                    except Exception as exc:
+                        self.log(f'Chime watchdog recovery failed: {exc}')
+                        self._clear_chime_active()
+
+                if not playing and kind and path and (kind.startswith('scheduled:') or kind == 'random_fill'):
+                    # Silence watchdog: if a SHOW or FILL track should be
+                    # playing but isn't, and we've been silent longer than the
+                    # threshold, try to recover. Guards against any edge case
+                    # that slips past the debounce and error-state checks above.
+                    # (Checked on EVERY silent poll — previously this sat in an
+                    # elif that only ran on the first poll after playback, so
+                    # the >=30s condition could never be met and the watchdog
+                    # was unreachable.)
+                    # Scoped to scheduled/fill kinds only: a manual
+                    # "Play Random" track ('random' kind) intentionally plays
+                    # once and stops, and commercial/chime transitions have
+                    # their own recovery (the commercial watchdog and the
+                    # chime finish handler).
+                    with self.lock:
+                        in_commercial_break = float(self.commercial_break_started_at or 0.0) > 0
+                    if not in_commercial_break and not self._is_chime_active():
+                        silent_for = time.time() - self.last_playing_at
+                        if silent_for >= self.silence_watchdog_seconds:
+                            self.last_playing_at = time.time()  # reset so we don't spam
+                            self.log(f'Silence watchdog: silent for {int(silent_for)}s with kind={kind!r} — recovering.')
+                            if not self._continue_active_segment():
+                                self._handoff_after_segment_finish()
                 last_kind = kind
                 last_path = path
             except Exception as exc:
@@ -1770,7 +2032,14 @@ class BackendState:
         window and start it immediately.  Called on backend startup and
         whenever settings are saved so a newly-configured schedule takes
         effect without waiting for the next exact start-minute boundary."""
+        if self._autostart_suppressed():
+            return
         if not self.settings.scheduler_enabled:
+            return
+        if self.sequential_schedule_mode:
+            # Don't let the live-clock catch-up jump in mid-marathon — there's
+            # a brief window between segments where nothing is "active" yet
+            # but we're still mid-sequence.
             return
         if not self.settings.program_blocks:
             return
@@ -1803,6 +2072,15 @@ class BackendState:
             self.log(f'Catch-up scheduler failed: {exc}')
 
     def scheduler_loop(self):
+        # Seed the once-per-hour/minute keys with the moment we started, so a
+        # backend booting during minute :00 doesn't immediately play the
+        # hourly chime (the real hour mark may be almost a minute in the
+        # past), and one booting on a commercial-target minute doesn't
+        # instantly queue a break. The first chime/break after startup
+        # happens at the NEXT scheduled moment, not the one we started inside.
+        boot = time.localtime()
+        self.last_chime_key = f'{boot.tm_year}-{boot.tm_yday}-{boot.tm_hour}'
+        self.last_commercial_break_key = f'{boot.tm_year}-{boot.tm_yday}-{boot.tm_hour}-{boot.tm_min}'
         while not self.shutdown_event.is_set():
             try:
                 self.last_scheduler_heartbeat = time.time()
@@ -1836,6 +2114,14 @@ class BackendState:
                         self._pending_commercial_trigger = 'per_hour'
                     self.log(f'Commercial break queued for {hour:02d}:{minute:02d} ({count} spot(s)).')
         if not self.settings.scheduler_enabled:
+            return
+        if self.sequential_schedule_mode:
+            # 'Play Full Schedule' marathon is in progress — block transitions
+            # are driven by _handoff_after_segment_finish/_next_sequential_item,
+            # not by the wall clock. Don't let a real-time match queue or start
+            # a different block out from under it.
+            return
+        if self._autostart_suppressed():
             return
         minute_of_day = hour * 60 + minute
         schedule = self.compute_schedule()
@@ -1876,11 +2162,32 @@ class BackendState:
         # Holding it during this call blocked the worker/scheduler/playback threads
         # for up to several milliseconds on every 5-second UI poll.
         computed_schedule = self.compute_schedule()
+        _lt = time.localtime()
+        pi_minute_of_day = _lt.tm_hour * 60 + _lt.tm_min + _lt.tm_sec / 60.0
+        # Episode position within the current show folder ("episode 3 of 12"),
+        # cached per (folder, track) so the 5-second status poll doesn't
+        # re-list the folder from disk every time.
+        track_index, track_total = 0, 0
+        try:
+            with self.lock:
+                seg = dict(self.active_segment) if self.active_segment else None
+            if seg and seg.get('type') == 'show' and now_playing and play_kind.startswith('scheduled:'):
+                cache = getattr(self, '_episode_pos_cache', None)
+                if cache and cache[0] == (seg.get('folder'), now_playing):
+                    track_index, track_total = cache[1]
+                else:
+                    tracks = self._tracks_from_folder(seg.get('folder', ''))
+                    if now_playing in tracks:
+                        track_index, track_total = tracks.index(now_playing) + 1, len(tracks)
+                    self._episode_pos_cache = ((seg.get('folder'), now_playing), (track_index, track_total))
+        except Exception:
+            track_index, track_total = 0, 0
         with self.lock:
             payload = {
                 'media_folder': self.settings.media_folder,
                 'parent_library_folder': self.settings.parent_library_folder,
                 'api_version': APP_VERSION,
+                'web_addresses': [url for url, _kind in getattr(self, 'web_addresses', [])],
                 'vlc_available': bool(vlc),
                 'uptime_seconds': int(max(0, time.time() - self.started_at)),
                 'health': {
@@ -1891,6 +2198,18 @@ class BackendState:
                 },
                 'now_playing': now_playing,
                 'play_kind': play_kind,
+                # The Pi's own local time — schedule displays on any device
+                # must use THIS, not the viewing device's clock, or a phone
+                # in another timezone highlights the wrong program.
+                'pi_minute_of_day': round(pi_minute_of_day, 3),
+                # Fields for the new interface (read-only additions; the
+                # classic page simply ignores them):
+                'track_position_ms': int(current_time_ms or 0),
+                'track_length_ms': int(total_length_ms or 0),
+                'track_index': track_index,
+                'track_total': track_total,
+                'next_chime_top_of_hour': bool(self.settings.hourly_chimes_enabled),
+                'commercials_pending_break': int(self.pending_commercial_break or 0),
                 'is_playing': is_playing,
                 'current_time_ms': current_time_ms,
                 'total_length_ms': total_length_ms,
@@ -1971,6 +2290,67 @@ class BackendState:
                 payload['logs'] = list(self.logs[-80:])
             return payload
 
+    def discovery_info(self, request_host_header: str = '') -> dict:
+        """Build the /api/discovery payload — the single source of truth for
+        client configuration.
+
+        Read-only by design: it inspects state and config files but never
+        changes playback, streaming, scheduling, or anything else. New
+        services (weather, recording, extra stream mounts, ...) should be
+        added HERE so clients keep working without HTML changes.
+        """
+        # Host as the CLIENT reached us (works for raspberrypi.local, LAN IP,
+        # Tailscale MagicDNS or Tailscale IP alike) — strip any :port suffix.
+        host = str(request_host_header or '').strip()
+        if host.startswith('['):                 # [ipv6]:port
+            host = host.split(']')[0].lstrip('[')
+        elif host.count(':') == 1:               # name:port or v4:port
+            host = host.split(':')[0]
+        # Best-effort transport hint for the UI's "Connected via ..." label.
+        via = 'lan'
+        if host.endswith('.ts.net') or host.startswith('100.'):
+            via = 'tailscale'
+        elif host in ('localhost', '127.0.0.1', '::1'):
+            via = 'local'
+        elif host.endswith('.local'):
+            via = 'mdns'
+        # Icecast port + mount: read from the darkice config if one exists so
+        # the stream URL always matches the real streaming setup; otherwise
+        # fall back to the standard defaults.
+        icecast_port, stream_mount = 8000, '/stream'
+        for cfg in (Path.home() / '.pi_stream_darkice.cfg',
+                    Path(__file__).resolve().parent / 'pi_stream_darkice_v2.cfg'):
+            try:
+                if not cfg.exists():
+                    continue
+                for raw in cfg.read_text(encoding='utf-8', errors='ignore').splitlines():
+                    line = raw.split('#', 1)[0].strip()
+                    if '=' not in line:
+                        continue
+                    key, _, value = (part.strip() for part in line.partition('='))
+                    if key == 'port' and value.isdigit():
+                        icecast_port = int(value)
+                    elif key == 'mountPoint' and value:
+                        stream_mount = '/' + value.lstrip('/')
+                break
+            except Exception:
+                continue
+        backend_port = int(getattr(self, 'bind_port', 0) or DEFAULT_PORT)
+        return {
+            'host': host,
+            'via': via,
+            'backend_port': backend_port,
+            'icecast_port': icecast_port,
+            'stream_mount': stream_mount,
+            'stream_url': f'http://{host}:{icecast_port}{stream_mount}' if host else '',
+            'app_version': APP_VERSION,
+            'vlc_available': bool(vlc),
+            'features': [
+                'scheduler', 'commercials', 'chimes', 'fill',
+                'random_playback', 'logs', 'scans',
+            ],
+        }
+
     def ui_status(self):
         return self._build_status_payload(include_logs=False)
 
@@ -2000,14 +2380,20 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         self.end_headers()
 
-    def _serve_html(self):
-        ui_file = Path(__file__).resolve().parent / 'pi_radio_web.html'
+    def _serve_html(self, ui_file=None):
+        ui_file = ui_file or CLASSIC_UI_FILE
         try:
             data = ui_file.read_bytes()
             self.send_response(200)
             self.send_header('Content-Type', 'text/html; charset=utf-8')
             self.send_header('Content-Length', str(len(data)))
             self.send_header('Access-Control-Allow-Origin', '*')
+            # Never let browsers cache the UI: phones cached old copies of
+            # this page indefinitely, so new features (Listen button, address
+            # card, status watchdog) never appeared without a manual
+            # hard-refresh. The page is tiny and served from the local Pi —
+            # always send it fresh.
+            self.send_header('Cache-Control', 'no-store, must-revalidate')
             self.end_headers()
             self.wfile.write(data)
         except FileNotFoundError:
@@ -2021,7 +2407,37 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urlparse(self.path).path
         if path in ('/', '/ui', '/index.html'):
-            self._serve_html()
+            # New interface by default; the classic page remains fully
+            # available at /classic and each page links to the other.
+            self._serve_html(NEW_UI_FILE if NEW_UI_FILE.exists() else CLASSIC_UI_FILE)
+            return
+        if path in ('/classic', '/classic.html'):
+            self._serve_html(CLASSIC_UI_FILE)
+            return
+        if path == '/discovery.js':
+            # Serve the isolated discovery module (see discovery.js). Kept as
+            # a separate file so discovery logic never mixes into the main UI
+            # script and can be maintained/debugged independently.
+            js_file = Path(__file__).resolve().parent / 'discovery.js'
+            try:
+                data = js_file.read_bytes()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/javascript; charset=utf-8')
+                self.send_header('Content-Length', str(len(data)))
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.send_header('Cache-Control', 'no-store, must-revalidate')
+                self.end_headers()
+                self.wfile.write(data)
+            except FileNotFoundError:
+                self.send_response(404)
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+            return
+        if path == '/api/discovery':
+            # Single source of truth for client configuration. Read-only:
+            # reports how to reach this backend and the Icecast stream. The
+            # web UI (and any future client) builds all its URLs from this.
+            self._send({'ok': True, 'discovery': state.discovery_info(self.headers.get('Host', ''))})
             return
         if path == '/status':
             self._send({'ok': True, 'status': state.status()})
@@ -2134,45 +2550,68 @@ class Handler(BaseHTTPRequestHandler):
                 job = state.enqueue_scan_commercials(force=bool(payload.get('force', False)))
                 self._send({'ok': True, 'queued': True, 'job': job})
             elif path == '/play_random':
+                state.suppress_autostart_until = 0.0
+                with state.lock:
+                    state.sequential_schedule_mode = False
                 track = state.pick_random()
                 self._send({'ok': True, 'track': track})
             elif path == '/play_full_schedule':
-                # Start from block 0 and let the scheduler chain through all blocks in order
+                state.suppress_autostart_until = 0.0
+                # Start from block 0 and let the handoff logic chain through
+                # every block in list order, ignoring the wall clock.
                 with state.lock:
                     state._clear_active_segment()
                     state._set_pending_schedule_item(None)
                     state.resume_after_chime = None
                     state.current_segment_label = ''
+                    state.sequential_schedule_mode = True
                 state._reset_commercial_state(clear_pending=True)
                 track = state.play_schedule_block(0)
                 state.log('Playing full schedule from block 1.')
                 self._send({'ok': True, 'track': track})
             elif path == '/play_schedule_now':
+                state.suppress_autostart_until = 0.0
+                with state.lock:
+                    state.sequential_schedule_mode = False
                 minute_of_day = time.localtime().tm_hour * 60 + time.localtime().tm_min
                 item = state._current_schedule_item(minute_of_day)
                 if item and item.get('type') == 'show':
                     track = state.play_schedule_block(int(item.get('index', 0)), item)
                     self._send({'ok': True, 'track': track, 'item': item})
-                elif item and item.get('type') == 'fill':
-                    track = state._start_fill_segment(item)
-                    self._send({'ok': True, 'track': track, 'item': item})
                 else:
+                    # The clock may currently be in the schedule's FILL window
+                    # (after the program blocks end). Someone pressing "Play
+                    # Schedule" wants their PROGRAMS, not random fill — random
+                    # fill only enters via the scheduler on its own. Start the
+                    # schedule from block 1 instead.
+                    if item and item.get('type') == 'fill':
+                        state.log('Play Schedule pressed during the fill window — starting first program block instead of random fill.')
                     track = state.play_schedule_block(0)
                     self._send({'ok': True, 'track': track, 'fallback': True})
             elif path == '/test_hour_chime':
+                state.suppress_autostart_until = 0.0
                 hour = int(payload.get('hour', time.localtime().tm_hour)) % 24
                 self._send(state.trigger_hourly_chime(hour, test_only=True))
             elif path == '/test_commercial_break':
+                state.suppress_autostart_until = 0.0
                 count = int(payload.get('count', state._pick_spot_count()))
-                with state.lock:
-                    state._clear_active_segment()
-                    state._set_pending_schedule_item(None)
-                    state.resume_after_chime = None
-                    state.current_segment_label = ''
+                # Behave exactly like a real break: capture the currently
+                # playing track and position, fade out, play the spots, then
+                # resume the program where it left off. (Previously this
+                # endpoint stopped playback and cleared the active segment
+                # BEFORE starting the break, so there was nothing to resume
+                # and the show never came back after a test.)
+                with state.player.lock:
+                    cur_kind = state.player.current_kind
                 state._reset_commercial_state(clear_pending=True)
-                state.player.stop()
-                state._start_commercial_break(max(1, count))
-                self._send({'ok': True, 'count': count, 'started': True})
+                if cur_kind == 'commercial':
+                    # Test pressed while a break was already playing — don't
+                    # try to "resume" a half-finished spot afterward; just
+                    # restart the break cleanly. The active segment is left
+                    # intact so the show continues after the new break.
+                    state.player.stop()
+                started = state._start_commercial_break(max(1, count))
+                self._send({'ok': True, 'count': count, 'started': bool(started)})
             elif path == '/stop':
                 temp_path = state.player.current_path
                 temp_kind = state.player.current_kind
@@ -2181,12 +2620,17 @@ class Handler(BaseHTTPRequestHandler):
                     state._set_pending_schedule_item(None)
                     state.resume_after_chime = None
                     state.current_segment_label = ''
+                    state.sequential_schedule_mode = False
                     # Stamp last_finished_signature with the track being stopped so
                     # the playback monitor won't treat this as a natural end-of-track
                     # and trigger a handoff to the next scheduled item.
                     if temp_kind or temp_path:
                         state.last_finished_signature = (temp_kind, temp_path)
                 state._reset_commercial_state(clear_pending=True)
+                # 2-second quiet window: any in-flight transition that was
+                # about to start the next track/block is suppressed, so ONE
+                # Stop press always sticks.
+                state.suppress_autostart_until = time.time() + 2.0
                 state.player.stop()
                 state._cleanup_temp_media(temp_path)
                 state._clear_chime_active()
@@ -2224,6 +2668,42 @@ class Handler(BaseHTTPRequestHandler):
 
 
 
+def _list_web_addresses(port: int) -> list:
+    """Return [(url, kind), ...] for every practical way to reach this Pi:
+    the mDNS name (hostname.local), each LAN IP, and the Tailscale IP if
+    the Pi is on a tailnet. Best-effort and read-only."""
+    results = []
+    try:
+        hostname = socket.gethostname().strip()
+        if hostname and hostname != 'localhost':
+            results.append((f'http://{hostname}.local:{port}', 'mdns'))
+    except Exception:
+        pass
+    ips = set()
+    try:
+        # UDP "connect" to a public IP: no packet is sent, but the OS picks
+        # the primary outbound interface, revealing the main LAN IP.
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        probe.connect(('8.8.8.8', 80))
+        ips.add(probe.getsockname()[0])
+        probe.close()
+    except Exception:
+        pass
+    try:
+        out = subprocess.run(['hostname', '-I'], capture_output=True, text=True, timeout=2).stdout
+        for token in out.split():
+            if token.count('.') == 3:
+                ips.add(token.strip())
+    except Exception:
+        pass
+    for ip in sorted(ips):
+        if ip.startswith('127.'):
+            continue
+        kind = 'tailscale' if ip.startswith('100.') else 'lan'
+        results.append((f'http://{ip}:{port}', kind))
+    return results
+
+
 def _find_open_port(host: str, preferred: int, attempts: int = 25) -> int:
     for port in range(preferred, preferred + attempts):
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -2246,7 +2726,45 @@ if __name__ == '__main__':
     except Exception:
         pass
     bind_host = os.environ.get('RADIO_BIND_HOST', '0.0.0.0')
+    # ── Single-instance guard ──
+    # Two backends at once (e.g. the systemd auto-start service PLUS a manual
+    # ./start_all.sh) both play the schedule over each other, and Stop only
+    # reaches one of them. If another Pi Radio backend already answers on the
+    # recorded port, refuse to start a second one.
+    try:
+        if PORT_FILE.exists():
+            existing_port = int(PORT_FILE.read_text().strip() or 0)
+            if existing_port:
+                import urllib.request as _ur
+                try:
+                    with _ur.urlopen(f'http://127.0.0.1:{existing_port}/status', timeout=1.5) as _r:
+                        _payload = json.loads(_r.read().decode('utf-8'))
+                    if _payload.get('ok') and 'api_version' in _payload.get('status', {}):
+                        print(f'ERROR: another Pi Radio backend is already running on port {existing_port}.', flush=True)
+                        print('Refusing to start a second instance (it would play over the first', flush=True)
+                        print('and Stop would only reach one of them).', flush=True)
+                        print('Stop the running one first: ./kill_radio.sh  (or: sudo systemctl stop pi-radio)', flush=True)
+                        raise SystemExit(1)
+                except (OSError, ValueError):
+                    pass  # stale port file / nothing listening — fine to start
+    except SystemExit:
+        raise
+    except Exception:
+        pass
+
     bind_port = _find_open_port(bind_host, DEFAULT_PORT)
+    state.bind_port = bind_port  # exposed via /api/discovery
+    # Work out every REAL address this radio can be reached at and list them
+    # in the log (visible in the desktop app's Logs window and the web UI's
+    # Logs tab) as well as in the status payload, so nobody has to guess the
+    # website address. 0.0.0.0 means "all interfaces" and is useless to type
+    # into a phone — these are the usable ones.
+    state.web_addresses = _list_web_addresses(bind_port)
+    if state.web_addresses:
+        state.log('Web interface addresses (open any of these on a phone or PC):')
+        for url, kind in state.web_addresses:
+            label = {'mdns': 'name', 'lan': 'LAN', 'tailscale': 'Tailscale'}.get(kind, kind)
+            state.log(f'    {url}   ({label})')
     server = ThreadingHTTPServer((bind_host, bind_port), Handler)
     server_ref['server'] = server
     try:

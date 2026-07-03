@@ -66,8 +66,11 @@ class RadioUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(f'{APP_TITLE} - Chime Folder Frontend ({APP_VERSION})')
-        self.geometry('560x360')
-        self.minsize(520, 320)
+        # Wide enough for the web-address line to fit on one row, but only
+        # as tall as the actual content (labels + two button rows) — the
+        # previous 560px height left a large empty band at the bottom.
+        self.geometry('820x420')
+        self.minsize(680, 380)
         self.settings = AppSettings.load()
         self.backend_online = False
         self.backend_version = 'unknown'
@@ -86,6 +89,7 @@ class RadioUI(tk.Tk):
         self.now_playing_var = tk.StringVar(value='Now Playing: (nothing)')
         self.summary_var = tk.StringVar(value='Starting…')
         self.scan_var = tk.StringVar(value='')
+        self.web_address_var = tk.StringVar(value='Web interface: (starting…)')
         self.busy_var = tk.StringVar(value='Ready')
 
         self.request_queue: queue.Queue = queue.Queue()
@@ -111,7 +115,11 @@ class RadioUI(tk.Tk):
         outer.pack(fill='both', expand=True)
 
         ttk.Label(outer, textvariable=self.now_playing_var, font=('TkDefaultFont', 12, 'bold')).pack(anchor='w')
-        ttk.Label(outer, textvariable=self.summary_var, wraplength=520).pack(anchor='w', pady=(4, 0))
+        # The website address, front and center — this is the screen someone
+        # sitting at the Pi sees, so the address to type on a phone lives here.
+        ttk.Label(outer, textvariable=self.web_address_var, foreground='#1f4f8b',
+                  font=('TkDefaultFont', 10, 'bold'), wraplength=760).pack(anchor='w', pady=(4, 0))
+        ttk.Label(outer, textvariable=self.summary_var, wraplength=760).pack(anchor='w', pady=(4, 0))
         ttk.Label(outer, textvariable=self.scan_var, foreground='#555').pack(anchor='w', pady=(2, 10))
         ttk.Label(outer, textvariable=self.busy_var, foreground='#1f4f8b').pack(anchor='w', pady=(0, 8))
 
@@ -192,11 +200,17 @@ class RadioUI(tk.Tk):
         else:
             self.busy_var.set('Working…' if self.active_requests else 'Ready')
 
-    def _run_async(self, label: str, func, on_success=None, on_error=None, final_message: str | None = None):
+    def _run_async(self, label: str, func, on_success=None, on_error=None, final_message: str | None = None, quiet: bool = False):
         if self._closing:
             return
         self.active_requests += 1
-        self._set_busy(label)
+        # quiet=True: routine background work (the 5-second status poll) that
+        # should NOT take over the busy line. Previously every poll wrote
+        # "Refreshing status…" and the reset below only cleared labels
+        # starting with "Working", so the line said "Refreshing status…"
+        # forever. Real actions (Play, Save, scans) still show their labels.
+        if not quiet:
+            self._set_busy(label)
 
         def worker():
             try:
@@ -225,7 +239,11 @@ class RadioUI(tk.Tk):
                         self._set_busy(f'Error: {payload}')
                 elif kind == 'done':
                     self.active_requests = max(0, self.active_requests - 1)
-                    if self.active_requests == 0 and self.busy_var.get().startswith('Working'):
+                    current = self.busy_var.get()
+                    if self.active_requests == 0 and (
+                            current.startswith('Working')
+                            or current.startswith('Refreshing')
+                            or current.startswith('Loading')):
                         self._set_busy('Ready')
         except queue.Empty:
             pass
@@ -351,6 +369,7 @@ class RadioUI(tk.Tk):
         fill_source_var = tk.StringVar(value=self.settings.fill_source_mode)
         include_subfolders_var = tk.BooleanVar(value=bool(self.settings.fill_include_subfolders))
         scheduler_enabled_var = tk.BooleanVar(value=bool(self.settings.scheduler_enabled))
+        autoplay_on_start_var = tk.BooleanVar(value=bool(getattr(self.settings, 'autoplay_on_start', True)))
         commercials_enabled_var = tk.BooleanVar(value=bool(getattr(self.settings, 'commercials_enabled', False)))
         commercials_folder_var = tk.StringVar(value=getattr(self.settings, 'commercials_folder', ''))
         commercials_mode_var = tk.StringVar(value=getattr(self.settings, 'commercials_mode', 'random'))
@@ -378,6 +397,7 @@ class RadioUI(tk.Tk):
         top.pack(fill='x')
         _ready = [False]
         ttk.Checkbutton(top, text='Scheduler enabled', variable=scheduler_enabled_var).pack(side='left')
+        ttk.Checkbutton(top, text='Autoplay on start', variable=autoplay_on_start_var).pack(side='left', padx=(10, 0))
         ttk.Label(top, text='Start time').pack(side='left', padx=(14, 4))
         hour_spin = ttk.Spinbox(top, from_=0, to=23, textvariable=start_hour_var, width=4, format='%02.0f')
         hour_spin.pack(side='left')
@@ -729,6 +749,7 @@ class RadioUI(tk.Tk):
                 messagebox.showerror('Invalid Schedule', 'The total scheduled show hours are over 24. Please reduce the block lengths before saving.')
                 return
             self.settings.scheduler_enabled = bool(scheduler_enabled_var.get())
+            self.settings.autoplay_on_start = bool(autoplay_on_start_var.get())
             self.settings.duration_start_hour = start_hour
             self.settings.duration_start_minute = start_minute
             self.settings.schedule_fill_mode = fill_mode_var.get()
@@ -1110,8 +1131,20 @@ class RadioUI(tk.Tk):
                     _fetch_t['v'] = _t.time()
                 if win.winfo_exists():
                     win.after(2000, do_fetch)
+            # Run the HTTP request on the background thread, then marshal only
+            # the result handling back to the Tk thread. (Previously the thread
+            # scheduled `done(work())` via after(0), which made the blocking
+            # network call run ON the UI thread every 2s — freezing the whole
+            # app for up to 5s per poll whenever the backend was slow or down.)
             import threading as _thr
-            _thr.Thread(target=lambda: win.after(0, lambda: done(work())), daemon=True).start()
+            def _bg():
+                result = work()
+                try:
+                    if win.winfo_exists():
+                        win.after(0, lambda: done(result))
+                except Exception:
+                    pass
+            _thr.Thread(target=_bg, daemon=True).start()
 
         do_fetch()
 
@@ -1440,6 +1473,11 @@ class RadioUI(tk.Tk):
                 scan_parts.append(f"pending break {st.get('pending_commercial_break', 0)}")
             scan_parts.append(health_summary)
             self.scan_var.set(' | '.join(scan_parts))
+            addrs = st.get('web_addresses') or []
+            if addrs:
+                self.web_address_var.set('Web interface (open on any phone/PC):  ' + '   |   '.join(addrs))
+            else:
+                self.web_address_var.set(f'Web interface: http://<this-pi>:{get_backend_port()}')
             self.splash_message_var.set(f'Connected to backend {self.backend_version}. Finalizing UI…')
             self._finish_loading()
             if not self._auto_mounts_loaded:
@@ -1463,7 +1501,7 @@ class RadioUI(tk.Tk):
             self._poll_job = self.after(1000 if first else 5000, self.refresh_status)
 
         label = 'Refreshing status…' if self._ui_ready else 'Loading backend…'
-        self._run_async(label, lambda: api_get('/status'), success, error)
+        self._run_async(label, lambda: api_get('/status'), success, error, quiet=self._ui_ready)
 
     def on_close(self):
         if self._closing:

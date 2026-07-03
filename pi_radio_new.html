@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Pi Radio One</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Limelight&family=Archivo:wdth,wght@75..100,400..800&display=swap" rel="stylesheet">
+<style>
+/* ═══════════════════════════════════════════════════════════════
+   PI RADIO ONE — the new interface (live).
+   Talks to the same backend API as the classic page. The classic
+   page remains fully available at /classic; both link to each other.
+   ═══════════════════════════════════════════════════════════════ */
+:root {
+  --bakelite:#221810; --cabinet:#322517; --cabinet2:#3d2e1d;
+  --glow:#f2b13e; --glow-dim:#a97b2c;
+  --glass:#f6e9d0; --glass-dim:#c8b696;
+  --brass:#7d6342; --needle:#d84b35; --live:#8fbf6f;
+  --shadow:0 10px 28px rgba(0,0,0,.45);
+}
+* { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+body {
+  background:radial-gradient(120% 70% at 50% -10%, #3a2b1a 0%, var(--bakelite) 55%), var(--bakelite);
+  color:var(--glass); font-family:'Archivo', system-ui, sans-serif;
+  min-height:100vh; padding-bottom:84px;
+}
+.wrap { max-width:520px; margin:0 auto; padding:0 14px; }
+header { display:flex; align-items:center; justify-content:space-between; padding:16px 2px 12px; border-bottom:1px solid var(--brass); }
+.masthead { font-family:'Limelight', Georgia, serif; font-size:1.45rem; letter-spacing:.06em; }
+.masthead span { color:var(--glow); }
+.head-right { display:flex; align-items:center; gap:12px; }
+.onair { display:flex; align-items:center; gap:8px; font-size:.72rem; letter-spacing:.18em; font-weight:700; color:var(--glass-dim); }
+.lamp { width:12px; height:12px; border-radius:50%; background:var(--live); box-shadow:0 0 10px 2px rgba(143,191,111,.6); animation:pulse 2.6s ease-in-out infinite; }
+.lamp.off { background:#6b5642; box-shadow:none; animation:none; }
+@keyframes pulse { 50% { box-shadow:0 0 16px 4px rgba(143,191,111,.75); } }
+@media (prefers-reduced-motion: reduce) { .lamp { animation:none; } .needle { transition:none; } }
+.classic-link { color:var(--glass-dim); font-size:.68rem; text-decoration:none; border:1px solid var(--brass); padding:5px 9px; border-radius:8px; }
+
+.hero { margin-top:16px; background:radial-gradient(140% 120% at 50% 0%, #46351f 0%, var(--cabinet) 60%);
+  border:1px solid var(--brass); border-radius:16px; box-shadow:var(--shadow), inset 0 1px 0 rgba(246,233,208,.08);
+  padding:20px 18px 18px; text-align:center; }
+.eyebrow { font-size:.68rem; letter-spacing:.24em; text-transform:uppercase; color:var(--glow); font-weight:700; }
+.show-title { font-size:1.6rem; font-weight:800; margin:8px 0 2px; line-height:1.15; text-shadow:0 0 22px rgba(242,177,62,.25); overflow-wrap:anywhere; }
+.episode { color:var(--glass-dim); font-size:.92rem; overflow-wrap:anywhere; }
+.progress { margin:16px auto 6px; height:6px; max-width:340px; background:#241a10; border-radius:3px; overflow:hidden; border:1px solid #1a120a; }
+.progress i { display:block; height:100%; width:0%; background:linear-gradient(90deg, var(--glow-dim), var(--glow)); border-radius:3px; }
+.timecodes { display:flex; justify-content:space-between; max-width:340px; margin:0 auto; font-size:.75rem; color:var(--glass-dim); font-variant-numeric:tabular-nums; }
+.next-up { margin-top:14px; padding-top:12px; border-top:1px dashed var(--brass); font-size:.85rem; color:var(--glass-dim); line-height:1.5; }
+.next-up b { color:var(--glass); font-weight:600; }
+.hidden { display:none !important; }
+
+.controls { display:flex; gap:12px; margin-top:14px; }
+.bigbtn { flex:1; border:none; border-radius:14px; padding:16px 8px; font-family:inherit; font-size:.98rem; font-weight:800;
+  letter-spacing:.06em; text-transform:uppercase; cursor:pointer; box-shadow:var(--shadow); transition:transform .06s ease; }
+.bigbtn:active { transform:scale(.97); }
+.bigbtn:focus-visible { outline:3px solid var(--glow); outline-offset:2px; }
+.btn-listen { background:linear-gradient(180deg,#ffcf6e,var(--glow)); color:#3a2408; }
+.btn-listen.listening { background:linear-gradient(180deg,#a9d98c,var(--live)); color:#1d2d12; }
+.btn-stop { background:linear-gradient(180deg,#e2664e,var(--needle)); color:#fff; }
+.btn-quiet { background:var(--cabinet2); color:var(--glass); border:1px solid var(--brass); }
+.controls-note { text-align:center; font-size:.72rem; color:var(--glass-dim); margin-top:8px; }
+
+.section-title { margin:26px 0 10px; font-size:.72rem; letter-spacing:.24em; text-transform:uppercase; color:var(--glow);
+  font-weight:700; display:flex; justify-content:space-between; align-items:baseline; }
+.section-title small { color:var(--glass-dim); letter-spacing:.05em; text-transform:none; font-weight:400; }
+.dial { position:relative; background:linear-gradient(180deg,#2a1f12,#1d150c); border:1px solid var(--brass); border-radius:12px;
+  box-shadow:var(--shadow), inset 0 2px 8px rgba(0,0,0,.5); padding:26px 10px 8px; overflow:hidden; }
+.dial-track { position:relative; height:44px; border-radius:6px; overflow:hidden; display:flex; }
+.band { height:100%; position:relative; flex-shrink:0; border-right:1px solid rgba(0,0,0,.45); display:flex; align-items:center; justify-content:center; }
+.band.show { background:linear-gradient(180deg,#6d4f22,#56401e); }
+.band.fill { background:repeating-linear-gradient(45deg,#2e2214,#2e2214 6px,#362a19 6px,#362a19 12px); }
+.band label { font-size:.62rem; font-weight:700; letter-spacing:.05em; color:var(--glass); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:92%; text-shadow:0 1px 2px rgba(0,0,0,.7); }
+.band.fill label { color:var(--glass-dim); font-weight:500; }
+.ticks { position:absolute; top:6px; left:10px; right:10px; height:14px; }
+.tick { position:absolute; top:0; width:1px; height:8px; background:var(--brass); }
+.tick.major { height:14px; background:var(--glow-dim); }
+.tick span { position:absolute; top:-2px; left:3px; font-size:.58rem; color:var(--glass-dim); font-variant-numeric:tabular-nums; }
+.needle { position:absolute; top:20px; bottom:6px; width:2px; background:var(--needle); box-shadow:0 0 8px 1px rgba(216,75,53,.8); transition:left 1s linear; }
+.needle::after { content:''; position:absolute; top:-6px; left:-4px; border:5px solid transparent; border-top-color:var(--needle); }
+.dial-caption { display:flex; justify-content:space-between; font-size:.68rem; color:var(--glass-dim); padding:8px 4px 2px; }
+
+.guide-list { display:flex; flex-direction:column; gap:8px; }
+.guide-row { display:flex; align-items:center; gap:12px; background:var(--cabinet); border:1px solid var(--brass); border-radius:12px; padding:12px 14px; }
+.guide-row.now { border-color:var(--glow); box-shadow:0 0 0 1px var(--glow), var(--shadow); }
+.g-time { font-variant-numeric:tabular-nums; font-weight:700; font-size:.9rem; width:74px; color:var(--glow); flex-shrink:0; }
+.g-name { flex:1; font-weight:600; overflow-wrap:anywhere; }
+.g-name small { display:block; font-weight:400; color:var(--glass-dim); font-size:.78rem; margin-top:2px; }
+.g-badge { font-size:.62rem; letter-spacing:.12em; font-weight:800; text-transform:uppercase; padding:4px 8px; border-radius:20px; flex-shrink:0; }
+.g-badge.on { background:rgba(143,191,111,.15); color:var(--live); border:1px solid rgba(143,191,111,.4); }
+.g-badge.fill { background:rgba(200,182,150,.08); color:var(--glass-dim); border:1px solid var(--brass); }
+
+.card { background:var(--cabinet); border:1px solid var(--brass); border-radius:14px; padding:14px 16px; margin-bottom:10px; box-shadow:var(--shadow); }
+.card-head { display:flex; align-items:center; justify-content:space-between; gap:10px; cursor:pointer; }
+.card-head h3 { font-size:.95rem; font-weight:700; }
+.card-sub { color:var(--glass-dim); font-size:.82rem; margin-top:4px; line-height:1.5; overflow-wrap:anywhere; }
+.card-sub b { color:var(--glass); }
+.editbtn { background:transparent; border:1px solid var(--brass); color:var(--glow); border-radius:8px; padding:6px 14px;
+  font-family:inherit; font-weight:700; font-size:.75rem; letter-spacing:.08em; cursor:pointer; flex-shrink:0; }
+.card-body { display:none; margin-top:12px; padding-top:12px; border-top:1px dashed var(--brass); }
+.card.open .card-body { display:block; }
+.field { margin-bottom:12px; }
+.field label { display:block; font-size:.8rem; font-weight:600; margin-bottom:4px; }
+.field .hint { font-size:.72rem; color:var(--glass-dim); margin-top:4px; line-height:1.45; }
+.field input[type=text], .field input[type=number], .field select {
+  width:100%; background:#241a10; border:1px solid var(--brass); color:var(--glass);
+  border-radius:8px; padding:10px 12px; font-family:inherit; font-size:.9rem; }
+.field input:focus, .field select:focus { outline:2px solid var(--glow); border-color:var(--glow); }
+.inline { display:flex; gap:10px; } .inline .field { flex:1; }
+.switch { display:flex; align-items:center; gap:10px; font-size:.85rem; font-weight:600; margin-bottom:10px; }
+.switch input { width:20px; height:20px; accent-color:var(--glow); }
+.addr a { display:block; color:var(--glow); font-weight:600; text-decoration:none; padding:5px 0; font-size:.92rem; overflow-wrap:anywhere; }
+
+.savebar { position:fixed; left:0; right:0; bottom:64px; display:none; z-index:30; }
+.savebar.show { display:block; }
+.savebar .inner { max-width:520px; margin:0 auto; padding:0 14px; }
+.savebar button { width:100%; border:none; border-radius:12px; padding:14px; background:linear-gradient(180deg,#ffcf6e,var(--glow));
+  color:#3a2408; font-family:inherit; font-weight:800; font-size:.95rem; letter-spacing:.06em;
+  box-shadow:0 -4px 20px rgba(0,0,0,.4), var(--shadow); cursor:pointer; }
+
+.logbox { background:#1a130b; border:1px solid var(--brass); border-radius:12px; padding:12px;
+  font-family:ui-monospace, Menlo, monospace; font-size:.7rem; color:var(--glass-dim); line-height:1.7; max-height:420px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; }
+
+nav { position:fixed; left:0; right:0; bottom:0; z-index:40; background:linear-gradient(180deg,#2c2013,#221810);
+  border-top:1px solid var(--brass); padding:8px 0 max(10px, env(safe-area-inset-bottom)); }
+.nav-inner { max-width:520px; margin:0 auto; display:flex; }
+.nav-btn { flex:1; background:none; border:none; color:var(--glass-dim); font-family:inherit; font-size:.68rem; font-weight:700;
+  letter-spacing:.08em; text-transform:uppercase; cursor:pointer; padding:6px 0; display:flex; flex-direction:column; align-items:center; gap:4px; }
+.nav-btn .ico { font-size:1.15rem; line-height:1; }
+.nav-btn.active { color:var(--glow); }
+.nav-btn:focus-visible { outline:2px solid var(--glow); border-radius:8px; }
+.view { display:none; } .view.active { display:block; }
+.toast { position:fixed; top:14px; left:50%; transform:translateX(-50%); background:var(--cabinet2); color:var(--glass);
+  border:1px solid var(--glow); border-radius:10px; padding:10px 18px; font-size:.85rem; font-weight:600;
+  box-shadow:var(--shadow); z-index:50; display:none; max-width:90vw; text-align:center; }
+.toast.err { border-color:var(--needle); }
+footer { text-align:center; color:var(--glass-dim); font-size:.68rem; padding:26px 0 10px; }
+footer a { color:var(--glow); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="masthead">PI <span>RADIO</span> ONE</div>
+    <div class="head-right">
+      <div class="onair"><div class="lamp off" id="lamp"></div><span id="onair-label">…</span></div>
+      <a class="classic-link" href="classic">Classic view</a>
+    </div>
+  </header>
+
+  <!-- ════════ RADIO ════════ -->
+  <div class="view active" id="view-home">
+    <div class="hero">
+      <div class="eyebrow" id="np-eyebrow">Now Playing</div>
+      <div class="show-title" id="np-title">Connecting…</div>
+      <div class="episode" id="np-ep"></div>
+      <div class="progress" id="np-prog"><i id="np-bar"></i></div>
+      <div class="timecodes" id="np-codes"><span id="np-elapsed">0:00</span><span id="np-total">0:00</span></div>
+      <div class="next-up" id="np-next"></div>
+    </div>
+    <div class="controls">
+      <button class="bigbtn btn-listen" id="listen" onclick="toggleListen()">▶ Listen</button>
+      <button class="bigbtn btn-stop" onclick="stopEverything()">■ Stop</button>
+    </div>
+    <div class="controls-note">The stream plays ~10–30 s behind the Pi's speakers — normal radio buffering.</div>
+
+    <div class="section-title">Today's Program <small id="clock"></small></div>
+    <div class="dial">
+      <div class="ticks" id="ticks"></div>
+      <div class="dial-track" id="dialtrack"></div>
+      <div class="needle" id="needle"></div>
+      <div class="dial-caption"><span id="day-start-l"></span><span>broadcast day</span><span id="day-start-r"></span></div>
+    </div>
+
+    <div class="section-title">Coming Up</div>
+    <div class="guide-list" id="upnext"></div>
+  </div>
+
+  <!-- ════════ GUIDE ════════ -->
+  <div class="view" id="view-guide">
+    <div class="section-title" style="margin-top:18px">Full Program Guide</div>
+    <div class="guide-list" id="fullguide"></div>
+    <div class="section-title">Schedule Actions</div>
+    <div class="controls" style="margin-top:0">
+      <button class="bigbtn btn-quiet" onclick="apiPost('/play_schedule_now',{},function(){toast('Starting your programs')})">▶ Play the schedule</button>
+      <button class="bigbtn btn-quiet" onclick="apiPost('/play_random',{},function(){toast('Playing a random track')})">🎲 Play random</button>
+    </div>
+    <div class="controls" style="margin-top:10px">
+      <button class="bigbtn btn-quiet" onclick="apiPost('/play_full_schedule',{},function(){toast('Playing the full schedule from the top')})">⏭ Play full schedule (marathon)</button>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <div class="card-sub">To add, remove, reorder, or re-time program blocks, use the schedule editor in the <a href="classic" style="color:var(--glow)">classic view</a> — every editor there still works.</div>
+    </div>
+  </div>
+
+  <!-- ════════ STATION ════════ -->
+  <div class="view" id="view-station">
+    <div class="section-title" style="margin-top:18px">Station Settings</div>
+
+    <div class="card" id="c-sched">
+      <div class="card-head" onclick="flip('c-sched')">
+        <div><h3>Program schedule</h3><div class="card-sub" id="sub-sched">…</div></div>
+        <button class="editbtn">Edit</button>
+      </div>
+      <div class="card-body">
+        <div class="switch"><input type="checkbox" id="f-sched-on" onchange="dirty()"> Scheduler runs the broadcast day</div>
+        <div class="switch"><input type="checkbox" id="f-autoplay" onchange="dirty()"> Start playing automatically when the radio boots</div>
+        <div class="inline">
+          <div class="field"><label>Day starts — hour (0–23)</label><input type="number" id="f-start-h" min="0" max="23" onchange="dirty()"></div>
+          <div class="field"><label>minute</label><input type="number" id="f-start-m" min="0" max="59" onchange="dirty()"></div>
+        </div>
+        <div class="field"><label>When the schedule ends</label>
+          <select id="f-fill" onchange="dirty()">
+            <option value="random">Play random fill music</option>
+            <option value="loop">Loop the schedule again</option>
+            <option value="stop">Go silent</option>
+          </select>
+          <div class="hint">Program blocks, and where fill music comes from (main library or specific fill folders), are edited in the classic view's Scheduler tab.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" id="c-comm">
+      <div class="card-head" onclick="flip('c-comm')">
+        <div><h3>Commercials</h3><div class="card-sub" id="sub-comm">…</div></div>
+        <button class="editbtn">Edit</button>
+      </div>
+      <div class="card-body">
+        <div class="switch"><input type="checkbox" id="f-comm-on" onchange="dirty()"> Play commercial breaks</div>
+        <div class="field"><label>When to play a break</label>
+          <div class="switch"><input type="checkbox" id="f-eot" onchange="dirty()"> After every episode (end of track)</div>
+          <div class="switch"><input type="checkbox" id="f-eos" onchange="dirty()"> When a show block ends (end of show)</div>
+          <div class="switch"><input type="checkbox" id="f-btw" onchange="dirty()"> Between one show block and the next</div>
+          <div class="hint">These are the same three switches as the classic view's "When to fire breaks".</div>
+        </div>
+        <div class="field"><label>Timed breaks per hour (0 = off)</label>
+          <input type="number" id="f-per-hour" min="0" max="12" onchange="dirty()">
+          <div class="hint">Timed breaks wait for the current track to finish before playing.</div>
+        </div>
+        <div class="switch"><input type="checkbox" id="f-schedonly" onchange="dirty()"> Only during scheduled shows (never over random plays)</div>
+        <div class="field"><label>Spots per break</label>
+          <div class="inline">
+            <div class="field" style="margin-bottom:0"><label>Fixed number</label><input type="number" id="f-per-break" min="0" max="12" onchange="dirty()"></div>
+            <div class="field" style="margin-bottom:0"><label>— or random, min</label><input type="number" id="f-spots-min" min="0" max="12" onchange="dirty()"></div>
+            <div class="field" style="margin-bottom:0"><label>to max</label><input type="number" id="f-spots-max" min="0" max="12" onchange="dirty()"></div>
+          </div>
+          <div class="hint">If the random range is set (min 1 or more), it wins and each break rolls a count in that range; otherwise the fixed number is used.</div>
+        </div>
+        <div class="switch"><input type="checkbox" id="f-fade" onchange="dirty()"> Fade out and back in around breaks and resumes</div>
+        <div class="field"><button class="editbtn" onclick="testBreak()">Test a break now</button>
+          <div class="hint">Plays a real break — rolling the random spot count if one is set — then returns to the program where it left off. Quiet hours and guard rails are in the classic view.</div></div>
+      </div>
+    </div>
+
+    <div class="card" id="c-chime">
+      <div class="card-head" onclick="flip('c-chime')">
+        <div><h3>Hour chimes</h3><div class="card-sub" id="sub-chime">…</div></div>
+        <button class="editbtn">Edit</button>
+      </div>
+      <div class="card-body">
+        <div class="switch"><input type="checkbox" id="f-chime-on" onchange="dirty()"> Chime at the top of every hour</div>
+        <div class="switch"><input type="checkbox" id="f-chime-int" onchange="dirty()"> Interrupt instead of pause/resume</div>
+        <div class="hint" style="margin:-4px 0 10px 30px">Unticked (default): the show pauses for the chime and resumes where it left off. Ticked: the chime cuts the track off and the show does not resume.</div>
+        <div class="field"><label>Chime style</label>
+          <select id="f-chime-mode" onchange="dirty()">
+            <option value="repeat_strike">Strike the hour count (3 dings at 3 o'clock)</option>
+            <option value="audio_drop">Play a recording chosen per hour</option>
+          </select>
+          <div class="hint">Per-hour recordings are assigned in the classic view's Hour Chimes editor.</div>
+        </div>
+        <div class="field"><button class="editbtn" onclick="apiPost('/test_hour_chime',{},function(){toast('Playing this hour\'s chime — the program resumes after')})">Test the chime</button></div>
+      </div>
+    </div>
+
+    <div class="card" id="c-lib">
+      <div class="card-head" onclick="flip('c-lib')">
+        <div><h3>Music &amp; show folders</h3><div class="card-sub" id="sub-lib">…</div></div>
+        <button class="editbtn">Edit</button>
+      </div>
+      <div class="card-body">
+        <div class="field"><label>Main music folder</label><input type="text" id="f-media" onchange="dirty()"></div>
+        <div class="field"><label>Shows folder (one sub-folder per show)</label><input type="text" id="f-shows" onchange="dirty()"></div>
+        <div class="field"><label>Commercials folder</label><input type="text" id="f-ads" onchange="dirty()"></div>
+        <div class="field">
+          <button class="editbtn" onclick="rescanAll()">Rescan all folders</button>
+          <div class="hint" id="scan-hint"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" id="c-vol">
+      <div class="card-head" onclick="flip('c-vol')">
+        <div><h3>Volume &amp; sound</h3><div class="card-sub" id="sub-vol">…</div></div>
+        <button class="editbtn">Edit</button>
+      </div>
+      <div class="card-body">
+        <div class="inline">
+          <div class="field"><label>Volume (0–100)</label><input type="number" id="f-vol" min="0" max="100" onchange="dirty()"></div>
+          <div class="field"><label>Fade out (seconds)</label><input type="number" id="f-fade-out" min="0" max="20" onchange="dirty()"></div>
+          <div class="field"><label>Fade in (seconds)</label><input type="number" id="f-fade-in" min="0" max="20" onchange="dirty()"></div>
+        </div>
+        <div class="hint">Same two fade values as the classic view. Volume is the radio's own level, on top of the Pi's system volume.</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><div><h3>Radio website address</h3><div class="card-sub addr" id="addr-card">Detecting…</div></div></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><div><h3>Advanced editors</h3>
+        <div class="card-sub">Program blocks, quiet hours, per-hour chime files, fill folders, and detailed break rules all live in the <a href="classic" style="color:var(--glow)">classic view</a> — unchanged and one tap away.</div></div></div>
+    </div>
+  </div>
+
+  <!-- ════════ LOG ════════ -->
+  <div class="view" id="view-log">
+    <div class="section-title" style="margin-top:18px">Station Log <small id="log-meta"></small></div>
+    <div class="logbox" id="logbox">Loading…</div>
+  </div>
+
+  <footer id="foot">Pi Radio One · <a href="classic">classic view</a></footer>
+</div>
+
+<div class="savebar" id="savebar"><div class="inner"><button onclick="saveSettings()">Save changes</button></div></div>
+<div class="toast" id="toast"></div>
+
+<nav>
+  <div class="nav-inner">
+    <button class="nav-btn active" data-v="home" onclick="go('home')"><span class="ico">◉</span>Radio</button>
+    <button class="nav-btn" data-v="guide" onclick="go('guide')"><span class="ico">▤</span>Guide</button>
+    <button class="nav-btn" data-v="station" onclick="go('station')"><span class="ico">⚙</span>Station</button>
+    <button class="nav-btn" data-v="log" onclick="go('log')"><span class="ico">≡</span>Log</button>
+  </div>
+</nav>
+
+<script src="discovery.js"></script>
+<script>
+/* ═══════════ Connection (same approach as the classic page) ═══════════ */
+var hostVal = '', portVal = '8765';
+(function initConn(){
+  try {
+    if (window.location.hostname && (location.protocol === 'http:' || location.protocol === 'https:')) {
+      hostVal = location.hostname;
+      portVal = location.port || '8765';
+    } else {
+      hostVal = localStorage.getItem('pi_radio_host') || '';
+      portVal = localStorage.getItem('pi_radio_port') || '8765';
+    }
+  } catch(e){}
+})();
+function getBase(){ return hostVal ? ('http://' + hostVal + ':' + portVal) : ''; }
+
+function apiGet(path, cb, errcb){
+  fetch(getBase() + path, {cache:'no-store'})
+    .then(function(r){ return r.json(); })
+    .then(function(d){ cb && cb(d); })
+    .catch(function(e){ errcb && errcb(e); });
+}
+function apiPost(path, body, cb){
+  fetch(getBase() + path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body||{})})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (d && d.ok === false) { toast('Radio says: ' + (d.error || 'request failed'), true); }
+      else { cb && cb(d); }
+      pollStatus();
+    })
+    .catch(function(e){ toast('Could not reach the radio: ' + e.message, true); });
+}
+
+/* ═══════════ Status polling (with stall watchdog) ═══════════ */
+var lastStatus = null, settingsLoaded = false, lastPollAt = 0, pollTimer = null;
+function schedPoll(ms){ if(pollTimer) clearTimeout(pollTimer); pollTimer = setTimeout(pollStatus, ms); }
+var pollFails = 0;
+function pollStatus(){
+  lastPollAt = Date.now();
+  apiGet('/status', function(d){
+    if (d && d.ok && d.status) {
+      pollFails = 0;
+      lastStatus = d.status;
+      lastStatus._received_at = Date.now();   // for smooth progress between polls
+      render(d.status);
+    }
+    schedPoll(5000);
+  }, function(){
+    // One missed poll is usually just a wifi blink — don't alarm the page
+    // until it happens twice in a row.
+    pollFails += 1;
+    if (pollFails >= 2) setOffline();
+    schedPoll(5000);
+  });
+}
+setInterval(function(){ if (Date.now() - lastPollAt > 15000) pollStatus(); }, 5000);
+document.addEventListener('visibilitychange', function(){ if (!document.hidden) pollStatus(); });
+
+/* ═══════════ Rendering ═══════════ */
+function esc(s){ var d=document.createElement('div'); d.textContent=String(s==null?'':s); return d.innerHTML; }
+function base(p){ p=String(p||''); var i=Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\')); return i>=0?p.slice(i+1):p; }
+function mmss(ms){ var s=Math.max(0,Math.floor(ms/1000)); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
+function fmt(m){ m=((m%1440)+1440)%1440; var h=Math.floor(m/60), mm=m%60, ap=h<12?'AM':'PM', hh=h%12||12; return hh+':'+String(mm).padStart(2,'0')+' '+ap; }
+function showNameOf(kind, path){
+  if (String(kind).indexOf('scheduled:') === 0) return kind.slice('scheduled:'.length);
+  if (kind === 'random') return 'Random track';
+  if (kind === 'random_fill') return 'Fill music';
+  if (kind === 'commercial') return 'Commercial break';
+  if (String(kind).indexOf('chime') >= 0 || String(kind).indexOf('hour_') === 0) return 'Hour chimes';
+  return base(path) || 'Radio';
+}
+
+function setOffline(){
+  document.getElementById('lamp').classList.add('off');
+  document.getElementById('onair-label').textContent = 'NO LINK';
+  document.getElementById('np-title').textContent = 'Cannot reach the radio';
+  document.getElementById('np-ep').textContent = 'Check that the Pi is on and this address is right: ' + (getBase() || '(unknown)');
+}
+
+function render(st){
+  var playing = !!st.is_playing;
+  document.getElementById('lamp').classList.toggle('off', !playing);
+  document.getElementById('onair-label').textContent = playing ? 'ON AIR' : 'OFF AIR';
+
+  /* hero */
+  if (playing) {
+    document.getElementById('np-eyebrow').textContent = 'Now Playing';
+    document.getElementById('np-title').textContent = showNameOf(st.play_kind, st.now_playing);
+    var ep = base(st.now_playing);
+    if (st.track_index && st.track_total) ep += ' · episode ' + st.track_index + ' of ' + st.track_total;
+    document.getElementById('np-ep').textContent = ep;
+    var len = +st.track_length_ms || 0, pos = +st.track_position_ms || 0;
+    var showBar = len > 0 && String(st.play_kind).indexOf('scheduled:') === 0;
+    document.getElementById('np-prog').classList.toggle('hidden', !showBar);
+    document.getElementById('np-codes').classList.toggle('hidden', !showBar);
+    if (showBar) {
+      document.getElementById('np-bar').style.width = Math.min(100, pos/len*100) + '%';
+      document.getElementById('np-elapsed').textContent = mmss(pos);
+      document.getElementById('np-total').textContent = mmss(len);
+    }
+  } else {
+    document.getElementById('np-eyebrow').textContent = 'Off Air';
+    document.getElementById('np-title').textContent = 'Stopped';
+    document.getElementById('np-ep').textContent = 'Use ▶ Play the schedule on the Guide tab to go back on air';
+    document.getElementById('np-prog').classList.add('hidden');
+    document.getElementById('np-codes').classList.add('hidden');
+  }
+
+  /* next-up line — from real settings/state, no guesswork */
+  var bits = [];
+  if (+st.commercials_pending_break > 0) bits.push('<b>commercial break</b> at the end of this track');
+  else if (st.commercials_enabled && +st.commercials_per_hour > 0) bits.push('<b>' + st.commercials_per_hour + ' break' + (st.commercials_per_hour>1?'s':'') + '/hour</b>');
+  if (st.next_chime_top_of_hour) bits.push('<b>chimes</b> at the top of the hour');
+  document.getElementById('np-next').innerHTML = bits.length ? ('Coming up: ' + bits.join(' · ')) : 'No breaks or chimes are scheduled.';
+
+  /* dial + guides (rebuild only when the schedule changes) */
+  var schedKey = JSON.stringify([st.program_blocks, st.duration_start_hour, st.duration_start_minute, st.schedule_fill_mode]);
+  if (schedKey !== render._schedKey) { render._schedKey = schedKey; buildDial(st); }
+  positionNeedle(st);
+  highlightNow(st);
+
+  /* station cards */
+  fillSummaries(st);
+  if (!settingsLoaded) { fillForms(st); settingsLoaded = true; }
+
+  /* addresses / summaries / log — rewrite only on change, so nothing
+     flickers or moves under a finger mid-tap on every poll */
+  var addrs = st.web_addresses || [];
+  var addrHtml = addrs.length
+    ? addrs.map(function(a){ return '<a href="'+esc(a)+'">'+esc(a)+'</a>'; }).join('') +
+      '<div class="hint" style="margin-top:4px">Open any of these on a phone or PC on your network. Bookmark one!</div>'
+    : 'This page: ' + esc(location.origin);
+  if (addrHtml !== render._addr) { render._addr = addrHtml; document.getElementById('addr-card').innerHTML = addrHtml; }
+
+  /* log */
+  var logs = st.logs || [];
+  var logText = logs.length ? logs.join('\n') : 'No log lines yet.';
+  if (logText !== render._log) { render._log = logText; document.getElementById('logbox').textContent = logText; }
+  document.getElementById('log-meta').textContent = 'backend ' + (st.api_version || '');
+  document.getElementById('foot').innerHTML = 'Pi Radio One · ' + esc(st.api_version || '') + ' · <a href="classic">classic view</a>';
+
+  /* scan hint */
+  var jobs = [];
+  ['scan_library_job','scan_show_folders_job','scan_fill_job','scan_commercials_job'].forEach(function(k){
+    if (st[k] && st[k].status && st[k].status !== 'done') jobs.push(k.replace('scan_','').replace('_job','') + ': ' + st[k].status);
+  });
+  document.getElementById('scan-hint').textContent = jobs.length ? ('Scans — ' + jobs.join(' · ')) : '';
+}
+
+/* ── dial strip from the real schedule ── */
+function dayStartMin(st){ return (+st.duration_start_hour||0)*60 + (+st.duration_start_minute||0); }
+// The RADIO'S current minute-of-day: anchored to the Pi's clock from the
+// last status poll and advanced locally between polls. Falls back to the
+// device clock only if the backend predates this field. Without this, a
+// device in another timezone highlighted the wrong program.
+function piMinuteNow(){
+  var st = lastStatus;
+  if (st && st.pi_minute_of_day != null && st._received_at) {
+    return (((+st.pi_minute_of_day) + (Date.now() - st._received_at) / 60000) % 1440 + 1440) % 1440;
+  }
+  var n = new Date();
+  return n.getHours()*60 + n.getMinutes() + n.getSeconds()/60;
+}
+function buildDial(st){
+  var track = document.getElementById('dialtrack'), ticks = document.getElementById('ticks');
+  track.innerHTML = ''; ticks.innerHTML = '';
+  var blocks = (st.program_blocks||[]).map(function(b){
+    return { name: b.label || base(b.folder) || 'Show', mins: Math.round((+b.hours||0)*60), type:'show' };
+  }).filter(function(b){ return b.mins > 0; });
+  var used = blocks.reduce(function(a,b){ return a+b.mins; }, 0);
+  if (used < 1440) {
+    var fillName = st.schedule_fill_mode === 'loop' ? 'schedule loops' : (st.schedule_fill_mode === 'stop' ? 'off air' : 'random fill');
+    blocks.push({ name: fillName, mins: 1440-used, type:'fill' });
+  }
+  blocks.forEach(function(b){
+    var d = document.createElement('div');
+    d.className = 'band ' + b.type;
+    d.style.width = (b.mins/1440*100) + '%';
+    d.innerHTML = '<label>' + esc(b.name) + '</label>';
+    track.appendChild(d);
+  });
+  var startMin = dayStartMin(st);
+  for (var h = 0; h < 24; h++) {
+    var t = document.createElement('div'), major = (h % 6 === 0);
+    t.className = 'tick' + (major ? ' major' : '');
+    t.style.left = (h/24*100) + '%';
+    if (major) {
+      var lab = (Math.floor(startMin/60) + h) % 24, ap = lab < 12 ? 'a' : 'p', hh = lab % 12 || 12;
+      t.innerHTML = '<span>' + hh + ap + '</span>';
+    }
+    ticks.appendChild(t);
+  }
+  document.getElementById('day-start-l').textContent = fmt(startMin);
+  document.getElementById('day-start-r').textContent = fmt(startMin);
+  buildGuides(st, blocks);
+}
+function positionNeedle(st){
+  var mins = piMinuteNow();
+  var since = ((mins - dayStartMin(st)) + 1440) % 1440;
+  document.getElementById('needle').style.left = (since/1440*100) + '%';
+  // Show the RADIO'S time; note it explicitly when the viewing device's
+  // clock disagrees (other timezone / skewed clock) so the mismatch is
+  // visible instead of confusing.
+  var dev = new Date(), devMins = dev.getHours()*60 + dev.getMinutes();
+  var diff = Math.abs(devMins - mins); if (diff > 720) diff = 1440 - diff;
+  document.getElementById('clock').textContent = fmt(Math.floor(mins)) + (diff > 2 ? ' at the radio' : ' now');
+}
+function buildGuides(st, blocks){
+  var full = document.getElementById('fullguide'); full.innerHTML = '';
+  var acc = 0, start = dayStartMin(st);
+  blocks.forEach(function(b, i){
+    var row = document.createElement('div');
+    row.className = 'guide-row'; row.dataset.idx = i;
+    row.innerHTML = '<div class="g-time">' + fmt(start+acc) + '</div>' +
+      '<div class="g-name">' + esc(b.name) + '<small>' + (b.type==='fill' ? 'until ' + fmt(start) : Math.round(b.mins/60*10)/10 + ' hours') + '</small></div>' +
+      '<div class="g-badge fill" data-badge>' + (b.type==='fill' ? 'Fill' : fmt(start+acc).split(' ')[1]) + '</div>';
+    full.appendChild(row);
+    acc += b.mins;
+  });
+  render._blocks = blocks;
+}
+function currentBlockIndex(st){
+  var blocks = render._blocks || [];
+  var mins = piMinuteNow();
+  var since = ((mins - dayStartMin(st)) + 1440) % 1440, acc = 0, cur = -1;
+  blocks.forEach(function(b, i){ if (since >= acc && since < acc + b.mins) cur = i; acc += b.mins; });
+  return cur;
+}
+function highlightNow(st){
+  var cur = currentBlockIndex(st);
+  highlightNow._last = cur;
+  var up = document.getElementById('upnext'); up.innerHTML = '';
+  var rows = document.querySelectorAll('#fullguide .guide-row');
+  rows.forEach(function(r, i){
+    var isNow = (i === cur);
+    r.classList.toggle('now', isNow);
+    var badge = r.querySelector('[data-badge]');
+    if (isNow) { badge.className = 'g-badge on'; badge.textContent = 'On now'; }
+    if (i >= cur && cur >= 0 && up.children.length < 3) up.appendChild(r.cloneNode(true));
+  });
+}
+
+/* ── settings cards ── */
+function setIfChanged(id, html){
+  var el = document.getElementById(id);
+  if (el && el.innerHTML !== html) el.innerHTML = html;
+}
+function fillSummaries(st){
+  setIfChanged('sub-sched', (st.scheduler_enabled ? 'Day starts <b>' + fmt(dayStartMin(st)) + '</b>' : '<b>Scheduler off</b>') +
+    ' · ' + ((st.program_blocks||[]).length) + ' shows · then ' +
+    (st.schedule_fill_mode === 'loop' ? 'loops' : st.schedule_fill_mode === 'stop' ? 'goes silent' : 'plays random fill'));
+  setIfChanged('sub-comm', (function(){
+    if (!st.commercials_enabled) return '<b>Off</b>';
+    var when = [];
+    if (st.commercials_end_of_track) when.push('after every episode');
+    if (st.commercials_end_of_show) when.push('when a show block ends');
+    if (st.commercials_between_shows) when.push('between shows');
+    if (+st.commercials_per_hour > 0) when.push(st.commercials_per_hour + '×/hour');
+    var spots = (+st.commercials_spots_min > 0)
+      ? st.commercials_spots_min + '–' + Math.max(+st.commercials_spots_max, +st.commercials_spots_min) + ' spots (random)'
+      : (st.commercials_per_break || 1) + ' spots each';
+    return '<b>' + (when.length ? when.join(' · ') : 'no trigger set — breaks will not play') + '</b> · ' +
+      spots + ' · ' + (st.commercial_count||0) + ' on file';
+  })());
+  setIfChanged('sub-chime', st.hourly_chimes_enabled
+    ? '<b>On</b> · ' + (st.chime_mode === 'audio_drop' ? 'plays a recording per hour' : 'strikes the hour count') + ' · ' +
+      (st.interrupt_hourly ? 'interrupts the show (no resume)' : 'resumes the show after')
+    : '<b>Off</b>');
+  setIfChanged('sub-lib', '<b>' + (st.library_count||0) + '</b> tracks · <b>' + (st.show_folder_count||0) + '</b> show folders · <b>' + (st.commercial_count||0) + '</b> commercials');
+  setIfChanged('sub-vol', 'Volume <b>' + (st.volume!=null?st.volume:'—') + '</b> · fades ' +
+    (st.fade_enabled ? 'on, ' + (st.fade_out_seconds||0) + ' s out / ' + (st.fade_in_seconds||0) + ' s in' : 'off'));
+}
+function fillForms(st){
+  document.getElementById('f-sched-on').checked = st.scheduler_enabled !== false;
+  document.getElementById('f-autoplay').checked = st.autoplay_on_start !== false;
+  document.getElementById('f-start-h').value = st.duration_start_hour != null ? st.duration_start_hour : 6;
+  document.getElementById('f-start-m').value = st.duration_start_minute || 0;
+  document.getElementById('f-fill').value = st.schedule_fill_mode || 'random';
+  document.getElementById('f-comm-on').checked = !!st.commercials_enabled;
+  document.getElementById('f-eot').checked = !!st.commercials_end_of_track;
+  document.getElementById('f-eos').checked = !!st.commercials_end_of_show;
+  document.getElementById('f-btw').checked = !!st.commercials_between_shows;
+  document.getElementById('f-schedonly').checked = !!st.commercials_scheduled_only;
+  document.getElementById('f-per-hour').value = st.commercials_per_hour || 0;
+  document.getElementById('f-per-break').value = st.commercials_per_break != null ? st.commercials_per_break : 1;
+  document.getElementById('f-spots-min').value = st.commercials_spots_min || 0;
+  document.getElementById('f-spots-max').value = st.commercials_spots_max || 0;
+  document.getElementById('f-fade').checked = st.fade_enabled !== false;
+  document.getElementById('f-chime-on').checked = !!st.hourly_chimes_enabled;
+  document.getElementById('f-chime-int').checked = !!st.interrupt_hourly;
+  document.getElementById('f-chime-mode').value = st.chime_mode || 'repeat_strike';
+  document.getElementById('f-media').value = st.media_folder || '';
+  document.getElementById('f-shows').value = st.parent_library_folder || '';
+  document.getElementById('f-ads').value = st.commercials_folder || '';
+  document.getElementById('f-vol').value = st.volume != null ? st.volume : 80;
+  document.getElementById('f-fade-out').value = st.fade_out_seconds != null ? st.fade_out_seconds : 3;
+  document.getElementById('f-fade-in').value = st.fade_in_seconds != null ? st.fade_in_seconds : 2;
+}
+function saveSettings(){
+  var payload = {
+    scheduler_enabled: document.getElementById('f-sched-on').checked,
+    autoplay_on_start: document.getElementById('f-autoplay').checked,
+    duration_start_hour: +document.getElementById('f-start-h').value || 0,
+    duration_start_minute: +document.getElementById('f-start-m').value || 0,
+    schedule_fill_mode: document.getElementById('f-fill').value,
+    commercials_enabled: document.getElementById('f-comm-on').checked,
+    commercials_end_of_track: document.getElementById('f-eot').checked,
+    commercials_end_of_show: document.getElementById('f-eos').checked,
+    commercials_between_shows: document.getElementById('f-btw').checked,
+    commercials_scheduled_only: document.getElementById('f-schedonly').checked,
+    commercials_per_hour: +document.getElementById('f-per-hour').value || 0,
+    commercials_per_break: +document.getElementById('f-per-break').value || 0,
+    commercials_spots_min: +document.getElementById('f-spots-min').value || 0,
+    commercials_spots_max: +document.getElementById('f-spots-max').value || 0,
+    fade_enabled: document.getElementById('f-fade').checked,
+    fade_out_seconds: +document.getElementById('f-fade-out').value || 0,
+    fade_in_seconds: +document.getElementById('f-fade-in').value || 0,
+    hourly_chimes_enabled: document.getElementById('f-chime-on').checked,
+    interrupt_hourly: document.getElementById('f-chime-int').checked,
+    chime_mode: document.getElementById('f-chime-mode').value,
+    media_folder: document.getElementById('f-media').value.trim(),
+    parent_library_folder: document.getElementById('f-shows').value.trim(),
+    commercials_folder: document.getElementById('f-ads').value.trim(),
+    volume: +document.getElementById('f-vol').value
+  };
+  apiPost('/save_settings', payload, function(){
+    document.getElementById('savebar').classList.remove('show');
+    settingsLoaded = false;   // re-fill forms from the saved truth
+    toast('Saved — settings apply immediately');
+  });
+}
+function dirty(){ document.getElementById('savebar').classList.add('show'); }
+function testBreak(){
+  var mn = +document.getElementById('f-spots-min').value || 0;
+  if (mn > 0) {
+    // Random range in use: send no count so the backend rolls the spot
+    // count exactly like a real break would.
+    apiPost('/test_commercial_break', {}, function(d){ toast('Playing a ' + (d && d.count ? d.count + '-spot ' : '') + 'test break — the program resumes after'); });
+  } else {
+    var n = +document.getElementById('f-per-break').value || 1;
+    apiPost('/test_commercial_break', {count:n}, function(){ toast('Playing a ' + n + '-spot test break — the program resumes after'); });
+  }
+}
+function rescanAll(){
+  apiPost('/scan_library', {}, null);
+  apiPost('/scan_show_folders', {}, null);
+  apiPost('/scan_fill_library', {}, null);
+  apiPost('/scan_commercials', {}, null);
+  toast('Rescanning all folders — watch the note below for progress');
+}
+
+/* ── listen / stop ── */
+var listenAudio = null;
+function streamUrl(){
+  try { if (window.PiDiscovery && PiDiscovery.getStreamUrl && PiDiscovery.getStreamUrl()) return PiDiscovery.getStreamUrl(); } catch(e){}
+  return hostVal ? ('http://' + hostVal + ':8000/stream') : '';
+}
+function stopListen(){
+  if (listenAudio) { try { listenAudio.pause(); listenAudio.src=''; } catch(e){} listenAudio = null; }
+  var b = document.getElementById('listen');
+  b.textContent = '▶ Listen'; b.classList.remove('listening');
+}
+function toggleListen(){
+  if (listenAudio) { stopListen(); return; }
+  var url = streamUrl();
+  if (!url) { toast('No stream address known yet', true); return; }
+  listenAudio = new Audio(url + (url.indexOf('?')<0?'?':'&') + 't=' + Date.now());
+  listenAudio.onerror = function(){ toast('Stream not reachable — is streaming running on the Pi?', true); stopListen(); };
+  var p = listenAudio.play();
+  if (p && p.catch) p.catch(function(e){ toast('Could not start the stream: ' + e.message, true); stopListen(); });
+  var b = document.getElementById('listen');
+  b.textContent = '■ Stop listening'; b.classList.add('listening');
+}
+function stopEverything(){
+  stopListen();
+  apiPost('/stop', {}, function(){ toast('Radio stopped'); });
+}
+
+/* ── chrome ── */
+function go(v){
+  document.querySelectorAll('.view').forEach(function(x){ x.classList.remove('active'); });
+  document.getElementById('view-'+v).classList.add('active');
+  document.querySelectorAll('.nav-btn').forEach(function(x){ x.classList.toggle('active', x.dataset.v === v); });
+  window.scrollTo(0,0);
+}
+function flip(id){ document.getElementById(id).classList.toggle('open'); }
+var toastTimer = null;
+function toast(msg, isErr){
+  var t = document.getElementById('toast');
+  t.textContent = msg; t.className = 'toast' + (isErr ? ' err' : ''); t.style.display = 'block';
+  clearTimeout(toastTimer); toastTimer = setTimeout(function(){ t.style.display = 'none'; }, 2600);
+}
+
+/* discovery (fills host/port + label; page works without it too) */
+if (window.PiDiscovery) {
+  PiDiscovery.init({
+    retries: 4, retryDelayMs: 1200,
+    getManualBase: function(){ return getBase(); },
+    onConnected: function(info){
+      if (info.host) {
+        hostVal = info.host; portVal = String(info.backend_port || portVal);
+        try { localStorage.setItem('pi_radio_host', hostVal); localStorage.setItem('pi_radio_port', portVal); } catch(e){}
+      }
+      pollStatus();
+    },
+    onFallback: function(){ pollStatus(); },
+    onFailed: function(){ setOffline(); }
+  });
+}
+setInterval(function(){
+  if (!lastStatus) return;
+  positionNeedle(lastStatus);
+  // Re-derive the on-now highlight only when the block actually changes —
+  // rebuilding the Coming Up list every second caused visible flicker.
+  var cur = currentBlockIndex(lastStatus);
+  if (cur !== highlightNow._last) highlightNow(lastStatus);
+  // Advance the progress bar locally between the 5-second polls, so it
+  // glides instead of jumping.
+  if (lastStatus.is_playing && +lastStatus.track_length_ms > 0 &&
+      String(lastStatus.play_kind).indexOf('scheduled:') === 0) {
+    var est = (+lastStatus.track_position_ms || 0) + (Date.now() - (lastStatus._received_at || Date.now()));
+    est = Math.min(est, +lastStatus.track_length_ms);
+    document.getElementById('np-bar').style.width = (est / lastStatus.track_length_ms * 100) + '%';
+    document.getElementById('np-elapsed').textContent = mmss(est);
+  }
+}, 1000);
+pollStatus();
+</script>
+</body>
+</html>
